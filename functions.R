@@ -7,5 +7,5 @@ Policy_channel_helper=function(channels=group_1,x){
 
 Normalize=function(x){return((x-min(x))/(max(x)-min(x)))}
 
-
+# in to out
 '%ni%' <- Negate('%in%')
