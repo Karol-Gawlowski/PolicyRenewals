@@ -52,7 +52,7 @@ rm(OneHot)
 # ///////////////////////////////////////
 # Initial EDA  ----
 # ///////////////////////////////////////
-# Distribution of the response variable
+# Distribution of the response variable by gender
 data %>% 
   ggplot(aes(x=Response))+
   geom_bar(aes(y = (..count..)/sum(..count..)))+
@@ -61,6 +61,30 @@ data %>%
   ylab("") +
   ggtitle("Distribution of the response variable",
           subtitle = "It's an imbalanced dataset")
+
+# Regions with the highest renewal rates by gender
+data %>% 
+  mutate(Response=as.integer(Response)-1) %>% 
+  select(Region_Code,Response,Gender) %>% 
+  pivot_table(.rows = Region_Code,
+              .columns = Gender,
+              .values = ~mean(Response)) %>% 
+  rename(Male=2,
+         Female=3) %>% 
+  arrange(-Female,-Male)
+
+# Regions with the highest mean premium 
+data %>% 
+  # mutate(Response=as.integer(Response)-1) %>% 
+  select(Region_Code,Annual_Premium,Gender) %>% 
+  pivot_table(.rows = Region_Code,
+              .columns = Gender,
+              .values = ~mean(Annual_Premium)) %>% 
+  rename(Male=2,
+         Female=3) %>% 
+  arrange(-Female,-Male)
+
+
 
 # we note that there are policyholders with very high premiums,
 # for the needs of the preliminary EDA, we will focus on the 95% of observations 
@@ -115,7 +139,7 @@ Prem_by_gen_age[1:1000,] %>%
   geom_point(aes(color=Gender))+
   ggtitle("Distribution of mean premium by age")
 
-# mean premium profile 
+# mean premium profile by gendar and age
 Prem_by_gen_age[,1:3] %>% 
   gather(key = "Gender",
          value="Premium",
@@ -124,8 +148,7 @@ Prem_by_gen_age[,1:3] %>%
   geom_point()+
   ggtitle("Distribution of mean premium by age")
 
-
-
+# excel style pivot table
 data %>%
   pivot_table(.rows = Age,
               .columns = Gender,
@@ -140,25 +163,29 @@ data %>%
   xlab("")+
   ylab("")
 
+# clean the env
+rm(Prem_by_gen_age,Q)
+
 # ///////////////////////////////////////
-# further data cleaning  ----
+# data cleaning  ----
 # ///////////////////////////////////////
 
-
-Vintages=data %>% 
-  select(Vintage,Response)  %>%  
-  group_by(Vintage) %>%
-  mutate(Count=n_distinct(Vintage))  %>% 
-  summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
-  as.data.frame()
-
-rm(Vintages)
-data=data %>% select(-Vintage)
+# like above - we have to separate out the tails of this variable
+# Vintages=data %>% 
+#   select(Vintage,Response)  %>%  
+#   group_by(Vintage) %>%
+#   mutate(Count=n_distinct(Vintage))  %>% 
+#   summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
+#   as.data.frame()
+# 
+# rm(Vintages)
+# data=data %>% select(-Vintage)
 
 # we have to clean the policy_sales_channel. 
 # There is too many of these channels, they differ on renewal rate and volume
 # we don't know anything specific about the sales channels which have low sales volume
 Sales_channels=data %>% 
+               mutate(Response=as.integer(Response)-1) %>% 
                select(Policy_Sales_Channel,Response)  %>%  
                group_by(Policy_Sales_Channel) %>%
                mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
@@ -177,7 +204,7 @@ Sales_channels %>%
                  xlab("")+
                  ylab("")
   
-# The classification is output as one-hot encoding
+# The classification is output as one-hot encoding 
 data$Policy_Sales_Channel=data$Policy_Sales_Channel %>% as.matrix() %>% as.integer()
 Sales_channels_one_hot=matrix(ncol=10,nrow=nrow(data))
 
@@ -215,10 +242,12 @@ sum(Sales_channels_one_hot)==nrow(data)
 data=data %>% select(-Policy_Sales_Channel)
 data=cbind(data,Sales_channels_one_hot)
 
-# these variables won't be used anymore
+# clean env
 rm(Sales_channels_one_hot,sequen,lower,group_1,class_Sales_ch,Sales_channels)
 
 # Region variable one hot encoding 
+# unluckilly, we don't know much about these regions,
+# it might be a good idea to try to group them - to consider
 Regions=predict(dummyVars("~.",data=data$Region_Code %>% as.data.frame),
                 newdata=data$Region_Code %>% as.data.frame)
 
@@ -234,12 +263,13 @@ unique(rowSums(Regions))==1
 rm(Regions)
 
 # Annual premium
-# there are instances with very high premium but less than 10% observations are above k=50,000 
+# there are instances with very high premium but less than 5% observations are above k=52,000 
 # we observe, that the renewal rate is 25% higher in case of high premium instances
-k=50000
+k=52000
 quantile(data$Annual_Premium ,probs = seq(0,1,by=0.05))
 
-data %>% select(Annual_Premium,Response) %>% 
+data %>% mutate(Response=as.integer(Response)-1) %>% 
+         select(Annual_Premium,Response) %>% 
          mutate(Indicator=(Annual_Premium>k)*1) %>% 
          group_by(Indicator) %>%
          summarise(mean=mean(Response))
@@ -251,7 +281,7 @@ Premiums=data %>% select(Annual_Premium) %>% mutate(Indicator=(Annual_Premium>k)
                                                     Annual_Premium=Annual_Premium-Premium_Surplus) %>% 
                                              select(-Indicator)
 
-# Normalization
+# Normalization (remember to run the function.R script first)
 Premiums$Premium_Surplus=Normalize(Premiums$Premium_Surplus)
 Premiums$Annual_Premium=Normalize(Premiums$Annual_Premium)
 
