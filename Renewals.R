@@ -10,14 +10,13 @@ library(caret)
 library(pROC)
 library(e1071)
 library(glmnet)
-# library(reshape2)
 library(remotes)
 install_version("DMwR", "0.4.1") #Package ‘DMwR’ was removed from the CRAN repository.
 library(DMwR)
+# library(reshape2)
 
 options(digits=2)
 set.seed(100)
-
 
 # Upload data
 # Source: https://www.kaggle.com/arashnic/imbalanced-data-practice?select=aug_train.csv
@@ -30,6 +29,22 @@ data=data_initial %>% arrange(id)
 data=data %>% mutate(Policy_Sales_Channel=as.factor(Policy_Sales_Channel),
                      Region_Code=as.factor(Region_Code),
                      Response=as.factor(Response))
+
+# ///////////////////////////////////////
+# Initial EDA  ----
+# ///////////////////////////////////////
+# we explore the data as it is, using data_initial. Afterwards data df is going to be sued
+
+library
+data_initial$
+
+
+
+
+
+# ///////////////////////////////////////
+# data cleaning  ----
+# ///////////////////////////////////////
 
 # we drop this variable, because it has close to 0 variance
 Vintages=data %>% 
@@ -51,10 +66,6 @@ data=data %>% mutate(Vehicle_Age=(Vehicle_Age=="< 1 Year")*0.5+
                                    (Vehicle_Age==">2 Years")*2.5,
                                  Vehicle_Damage=(Vehicle_Damage=="Yes")*1,
                                  Gender=(Gender=="Female")*1)
-
-# ///////////////////////////////////////
-# data cleaning and one hot encoding ----
-# ///////////////////////////////////////
 
 # we have to clean the policy_sales_channel. 
 # There is too many of these channels, they differ on renewal rate and volume
@@ -167,8 +178,8 @@ data$Age=Normalize(data$Age)
 # feature engineering  ----
 # ///////////////////////////////////////
 
-# think about creating a new variable from region x sales channel. 
-data_PCA=prcomp(x = data)
+
+# TBD
 
 # ///////////////////////////////////////
 # train/test split----
@@ -182,30 +193,26 @@ test_data=data[-sample,]
 # resampling to balance ----
 # ///////////////////////////////////////
 
+# NOT RUN
 # initial imbalance in the training set 16%
-mean(train_data$Response)
-
-train_data=rbind(train_data,
-                 SMOTE(form = Response ~ ., 
-                       data = train_data %>% select(-id) %>% mutate(Response=factor(Response)), 
-                       perc.over = 200, 
-                       perc.under = 0,
-                       k=5))
-  
-  a=SMOTE(form = Response ~ ., 
-          data = train_data %>% select(-id) %>% mutate(Response=factor(Response)), 
-          perc.over = 200, 
-          perc.under = 0,
-          k=5)
-
-nrow(a)
-
-summary(a)
-summary(train_data[1:1000,])
-
-mean(as.numeric(a$Response)-1)
-
-tail(a)
+# mean(train_data$Response)
+# 
+# train_data=rbind(train_data,
+#                  SMOTE(form = Response ~ ., 
+#                        data = train_data %>% select(-id) %>% mutate(Response=factor(Response)), 
+#                        perc.over = 200, 
+#                        perc.under = 0,
+#                        k=5))
+#   
+# 
+# nrow(a)
+# 
+# summary(a)
+# summary(train_data[1:1000,])
+# 
+# mean(as.numeric(a$Response)-1)
+# 
+# tail(a)
 
 # ///////////////////////////////////////
 # EDA ----
@@ -293,6 +300,20 @@ trControl = trainControl(
 
 # ## When you are done:
 # stopCluster(cl)
+
+
+train(x=train_data,
+      method = "mlpSGD",
+      size= ,        #(Hidden Units)
+      l2reg= ,       #(L2 Regularization)
+      lambda= ,      #(RMSE Gradient Scaling)
+      learn_rate= ,  #(Learning Rate)
+      momentum= ,    #(Momentum)
+      gamma= ,       #(Learning Rate Decay)
+      minibatchsz= , #(Batch Size)
+      repeats =      #(Models)
+      )
+      
 
 # ///////////////////////////////////////
 # Modeling - LOGISTIC REGRESSION ----
