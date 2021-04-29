@@ -3,17 +3,15 @@
 # ///////////////////////////////////////
 # Initialization ----
 # ///////////////////////////////////////
-
-library(dplyr)
-library(ggplot2)
+install_version("DMwR", "0.4.1") #Package ‘DMwR’ was removed from the CRAN repository.
+library(DMwR)
+library(tidyverse)
+library(tidyquant)
 library(caret)
 library(pROC)
 library(e1071)
 library(glmnet)
 library(remotes)
-install_version("DMwR", "0.4.1") #Package ‘DMwR’ was removed from the CRAN repository.
-library(DMwR)
-# library(reshape2)
 
 options(digits=2)
 set.seed(100)
@@ -23,49 +21,70 @@ set.seed(100)
 # the testing dataset provided on the link mentioned above did not contain the actual values 
 # "Response" is the target variable indicating whether a customer was successfully acquired
 # "Policy_Sales_Channel" - insurance broker
-data_initial=as.data.frame(read.csv("aug_train.csv"))
+data_initial=as.data.frame(read.csv("aug_train.csv")) %>% as_tibble()
 data=data_initial %>% arrange(id)
 
-data=data %>% mutate(Policy_Sales_Channel=as.factor(Policy_Sales_Channel),
-                     Region_Code=as.factor(Region_Code),
-                     Response=as.factor(Response))
+# there are no missing data
+sum(is.na(data))==1
+print(data)
 
+# change data type to factors where necessary and apply binary encoding
+data=data %>% mutate(Policy_Sales_Channel=factor(Policy_Sales_Channel),
+                     Region_Code=factor(Region_Code),
+                     Driving_License=factor(Driving_License),
+                     Response=factor(Response),
+                     Vehicle_Age=factor(Vehicle_Age),
+                     Vehicle_Damage=(Vehicle_Damage=="Yes")*1,
+                     Gender=(Gender=="Female")*1)
+
+# one hot encoding of vehicle_age
+OneHot = dummyVars("~ Vehicle_Age", data=data) %>% 
+         predict(newdata = data) %>% 
+         as.data.frame() %>% 
+         rename(Car_Age_New=1,
+                Car_Age_Oldest=2,
+                Car_Age_Older=3)
+
+data=data %>% select(-Vehicle_Age) %>% cbind(OneHot)
+rm(OneHot)
 # ///////////////////////////////////////
 # Initial EDA  ----
 # ///////////////////////////////////////
-# we explore the data as it is, using data_initial. Afterwards data df is going to be sued
 
-library
-data_initial$
+data %>%
+  pivot_table(.rows = Age,
+              .columns = Gender,
+              .values = ~mean(Annual_Premium))
 
+data %>%
+  pivot_table(.rows = Age,
+              .columns = Gender,
+              .values = ~mean(Annual_Premium))
 
 
 
 
 # ///////////////////////////////////////
-# data cleaning  ----
+# further data cleaning  ----
 # ///////////////////////////////////////
 
-# we drop this variable, because it has close to 0 variance
+
+data %>% 
+  ggplot(aes(x=Vintage))+
+  geom_density()+
+  ggtitle("Density of Vintage variable")+
+  xlab("")+
+  ylab("")
+
 Vintages=data %>% 
-         select(Vintage,Response)  %>%  
-         group_by(Vintage) %>%
-         mutate(Count=n_distinct(Vintage))  %>% 
-         summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
-         as.data.frame()
+  select(Vintage,Response)  %>%  
+  group_by(Vintage) %>%
+  mutate(Count=n_distinct(Vintage))  %>% 
+  summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
+  as.data.frame()
 
 rm(Vintages)
 data=data %>% select(-Vintage)
-
-# transform factors to numeric
-# Vehicle_Age: I assume that on average <1 Year == 0.5; 1-2 Year == 1.5; >2 Year == 2.5
-# Vehicle_Damage: 1 for Yes, 0 for No
-# Gender: 1 for Female, 0 for Male
-data=data %>% mutate(Vehicle_Age=(Vehicle_Age=="< 1 Year")*0.5+
-                                   (Vehicle_Age=="1-2 Year")*1.5+
-                                   (Vehicle_Age==">2 Years")*2.5,
-                                 Vehicle_Damage=(Vehicle_Damage=="Yes")*1,
-                                 Gender=(Gender=="Female")*1)
 
 # we have to clean the policy_sales_channel. 
 # There is too many of these channels, they differ on renewal rate and volume
