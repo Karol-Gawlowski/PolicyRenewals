@@ -11,10 +11,13 @@ library(pROC)
 library(e1071)
 library(glmnet)
 # library(reshape2)
-
+library(remotes)
+install_version("DMwR", "0.4.1") #Package ‘DMwR’ was removed from the CRAN repository.
+library(DMwR)
 
 options(digits=2)
 set.seed(100)
+
 
 # Upload data
 # Source: https://www.kaggle.com/arashnic/imbalanced-data-practice?select=aug_train.csv
@@ -23,13 +26,19 @@ set.seed(100)
 # "Policy_Sales_Channel" - insurance broker
 data_initial=as.data.frame(read.csv("aug_train.csv"))
 data=data_initial %>% arrange(id)
-data$Policy_Sales_Channel=as.factor(data$Policy_Sales_Channel)
-data$Region_Code=as.factor(data$Region_Code)
+
+data=data %>% mutate(Policy_Sales_Channel=as.factor(Policy_Sales_Channel),
+                     Region_Code=as.factor(Region_Code),
+                     Response=as.factor(Response))
 
 # we drop this variable, because it has close to 0 variance
-Vintages=data %>% select(Vintage,Response)  %>%  group_by(Vintage) %>%
-  mutate(Count=n_distinct(Vintage))  %>% 
-  summarise(Renewals=mean(Response), Count=sum(Count)) %>% as.data.frame()
+Vintages=data %>% 
+         select(Vintage,Response)  %>%  
+         group_by(Vintage) %>%
+         mutate(Count=n_distinct(Vintage))  %>% 
+         summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
+         as.data.frame()
+
 rm(Vintages)
 data=data %>% select(-Vintage)
 
@@ -48,26 +57,32 @@ data=data %>% mutate(Vehicle_Age=(Vehicle_Age=="< 1 Year")*0.5+
 # ///////////////////////////////////////
 
 # we have to clean the policy_sales_channel. 
-# There is too many of them, they differ on renewal rate and volume
-Sales_channels=data %>% select(Policy_Sales_Channel,Response)  %>%  group_by(Policy_Sales_Channel) %>%
-                        mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
-                        summarise(Renewals=mean(Response), Count=sum(Count)) %>% as.data.frame()
-
+# There is too many of these channels, they differ on renewal rate and volume
 # we don't know anything specific about the sales channels which have low sales volume
-Sales_channels=Sales_channels[order(-Sales_channels$Count,-Sales_channels$Renewals),]
+Sales_channels=data %>% 
+               select(Policy_Sales_Channel,Response)  %>%  
+               group_by(Policy_Sales_Channel) %>%
+               mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
+               summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
+               arrange(-Count,-Renewals) %>% 
+               as.data.frame()
 
-# Based on the density plot below and the above, we propose 10 groups
+# Based on the density plot below and the above observations, we propose 10 groups
 # 1 group for the policy sales channels <=75 sales volume
 # further 9 grpups based on the Renewal rate: 0-0.05; 0.05-0.1 and so on up to 0.45 
-ggplot(Sales_channels %>% filter(Count>75),aes(x=Renewals))+geom_density()
-
+Sales_channels %>% 
+                 filter(Count>75) %>% 
+                 ggplot(aes(x=Renewals))+
+                 geom_density()+
+                 ggtitle("Renewals distribution, by sales channel")+
+                 xlab("")+
+                 ylab("")
+  
 # The classification is output as one-hot encoding
 data$Policy_Sales_Channel=data$Policy_Sales_Channel %>% as.matrix() %>% as.integer()
-
 Sales_channels_one_hot=matrix(ncol=10,nrow=nrow(data))
 
-
-# first group 
+# first group, for channels with volume of <= 75 clients
 group_1=Sales_channels %>% filter(Count<=75) %>% select(Policy_Sales_Channel) %>% as.matrix() %>% as.integer()
 Sales_channels_one_hot[,1]=c(apply(data$Policy_Sales_Channel == matrix(data=rep(x=group_1,length(data$Policy_Sales_Channel)),
                                              nrow=length(data$Policy_Sales_Channel),
@@ -80,10 +95,13 @@ colnames(Sales_channels_one_hot)=paste(rep("Sales_perc",10),sapply(sequen, toStr
 
 # apply one hot encoding based on % of sales in channel
 for (i in 2:10){
-  class_Sales_ch=Sales_channels %>% filter(Count>75) %>% filter(Renewals<=sequen[i] & Renewals>sequen[i-1]) %>% 
-    select(Policy_Sales_Channel) %>% 
-    as.matrix() %>% 
-    as.integer() %>% sort()
+  class_Sales_ch=Sales_channels %>% 
+                 filter(Count>75) %>% 
+                 filter(Renewals<=sequen[i] & Renewals>sequen[i-1]) %>% 
+                 select(Policy_Sales_Channel) %>% 
+                 as.matrix() %>% 
+                 as.integer() %>% 
+                 sort()
   
   # return a binary vector indicating whether a given position belongs to i'th group 
   Sales_channels_one_hot[,i]=(apply(data$Policy_Sales_Channel == matrix(data=rep(x=class_Sales_ch,length(data$Policy_Sales_Channel)),
@@ -91,51 +109,56 @@ for (i in 2:10){
                                                ncol=length(class_Sales_ch),
                                                byrow=TRUE),1,sum) %>% as.data.frame())[[1]]
 }
-# consistency check - passed
+# consistency check
 sum(Sales_channels_one_hot)==nrow(data)
-
 
 # substitute the one-hot encoded sales channels 
 data=data %>% select(-Policy_Sales_Channel)
 data=cbind(data,Sales_channels_one_hot)
-rm(Sales_channels_one_hot)
+
+# these variables won't be used anymore
+rm(Sales_channels_one_hot,sequen,lower,group_1,class_Sales_ch,Sales_channels)
 
 # Region variable one hot encoding 
 Regions=predict(dummyVars("~.",data=data$Region_Code %>% as.data.frame),
-        newdata=data$Region_Code %>% as.data.frame)
-colnames(Regions)=paste(rep("Region",length(unique(data$Region_Code))),0:52,sep="_")
+                newdata=data$Region_Code %>% as.data.frame)
+
+colnames(Regions)=paste(rep("Region",
+                            length(unique(data$Region_Code))),
+                        0:52,sep="_")
 
 data=data %>% select(-Region_Code)
 data=cbind(data,Regions)
 
-# check passed
+# check 
 unique(rowSums(Regions))==1
 rm(Regions)
 
 # Annual premium
-# there are instances with very high premium but less than 10% observ are above k=50,000 
-# and there is over 4% point difference between the mean response in these two groups
-
+# there are instances with very high premium but less than 10% observations are above k=50,000 
+# we observe, that the renewal rate is 25% higher in case of high premium instances
 k=50000
 quantile(data$Annual_Premium ,probs = seq(0,1,by=0.05))
 
 data %>% select(Annual_Premium,Response) %>% 
          mutate(Indicator=(Annual_Premium>k)*1) %>% 
-         group_by(Indicator) %>% 
+         group_by(Indicator) %>%
          summarise(mean=mean(Response))
 
-# Create an additional column of values in excess of k
+# Create an additional column of values in excess of k 
+# works more efficiently through use of indicator, than rowwise function
 Premiums=data %>% select(Annual_Premium) %>% mutate(Indicator=(Annual_Premium>k)*1,
                                                     Premium_Surplus=Indicator*(Annual_Premium-k),
                                                     Annual_Premium=Annual_Premium-Premium_Surplus) %>% 
                                              select(-Indicator)
 
+# Normalization
 Premiums$Premium_Surplus=Normalize(Premiums$Premium_Surplus)
 Premiums$Annual_Premium=Normalize(Premiums$Annual_Premium)
 
 data=data %>% select(-Annual_Premium)
 data=cbind(data,Premiums)
-rm(Premiums)
+rm(Premiums,k)
 
 # Normalize age
 data$Age=Normalize(data$Age)
@@ -145,18 +168,15 @@ data$Age=Normalize(data$Age)
 # ///////////////////////////////////////
 
 # think about creating a new variable from region x sales channel. 
-
 data_PCA=prcomp(x = data)
 
-
 # ///////////////////////////////////////
-# train/test split  ----
+# train/test split----
 # ///////////////////////////////////////
 
 sample=c(sample_frac(as.data.frame(1:nrow(data)),size = 0.8))[[1]]
 train_data=data[sample,]
 test_data=data[-sample,]
-
 
 # ///////////////////////////////////////
 # resampling to balance ----
@@ -165,17 +185,34 @@ test_data=data[-sample,]
 # initial imbalance in the training set 16%
 mean(train_data$Response)
 
-# reducing the imbalance to 28% by resampling, on average is equivalent to just 
-# copying the instances that renewed the policy
-train_data_resampled=rbind(train_data,train_data %>% filter(Response==1))
-mean(train_data_resampled$Response)
+train_data=rbind(train_data,
+                 SMOTE(form = Response ~ ., 
+                       data = train_data %>% select(-id) %>% mutate(Response=factor(Response)), 
+                       perc.over = 200, 
+                       perc.under = 0,
+                       k=5))
+  
+  a=SMOTE(form = Response ~ ., 
+          data = train_data %>% select(-id) %>% mutate(Response=factor(Response)), 
+          perc.over = 200, 
+          perc.under = 0,
+          k=5)
+
+nrow(a)
+
+summary(a)
+summary(train_data[1:1000,])
+
+mean(as.numeric(a$Response)-1)
+
+tail(a)
 
 # ///////////////////////////////////////
 # EDA ----
 # ///////////////////////////////////////
 
 # Correlations
-correlations=cor(train_data[,-c(1,5,10)])%>% as.data.frame()
+correlations=cor(train_data[,-c(1,5,10)]) %>% as.data.frame()
 correlations*(correlations>=0.1)+correlations*(correlations<=-0.1)
 
 # check conditional plots/statistics given someone actually renewed the policy or not
