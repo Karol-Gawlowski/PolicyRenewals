@@ -12,6 +12,7 @@ library(pROC)
 library(e1071)
 library(glmnet)
 library(remotes)
+library(reshape2)
 
 options(digits=2)
 set.seed(100)
@@ -29,13 +30,13 @@ sum(is.na(data))==1
 print(data)
 
 # change data type to factors where necessary and apply binary encoding
-data=data %>% mutate(Policy_Sales_Channel=factor(Policy_Sales_Channel),
-                     Region_Code=factor(Region_Code),
-                     Driving_License=factor(Driving_License),
-                     Response=factor(Response),
-                     Vehicle_Age=factor(Vehicle_Age),
-                     Vehicle_Damage=(Vehicle_Damage=="Yes")*1,
-                     Gender=(Gender=="Female")*1)
+data=data %>% mutate(Policy_Sales_Channel=as.factor(Policy_Sales_Channel),
+                     Region_Code=as.factor(Region_Code),
+                     Driving_License=as.factor(Driving_License),
+                     Response=as.factor(Response),
+                     Vehicle_Age=as.factor(Vehicle_Age),
+                     Vehicle_Damage=as.factor((Vehicle_Damage=="Yes")*1),
+                     Gender=as.factor((Gender=="Female")*1))
 
 # one hot encoding of vehicle_age
 OneHot = dummyVars("~ Vehicle_Age", data=data) %>% 
@@ -47,34 +48,102 @@ OneHot = dummyVars("~ Vehicle_Age", data=data) %>%
 
 data=data %>% select(-Vehicle_Age) %>% cbind(OneHot)
 rm(OneHot)
+
 # ///////////////////////////////////////
 # Initial EDA  ----
 # ///////////////////////////////////////
+# Distribution of the response variable
+data %>% 
+  ggplot(aes(x=Response))+
+  geom_bar(aes(y = (..count..)/sum(..count..)))+
+  scale_y_continuous(labels=scales::percent) +
+  facet_grid(~Gender)+
+  ylab("") +
+  ggtitle("Distribution of the response variable",
+          subtitle = "It's an imbalanced dataset")
+
+# we note that there are policyholders with very high premiums,
+# for the needs of the preliminary EDA, we will focus on the 95% of observations 
+# below 55 200 annual premium
+quantile(data$Annual_Premium,probs=seq(0,1,by=0.05))
+# and it appears that 16% of the insureds pay 2630 
+sum(data$Annual_Premium==2630)/nrow(data)
+
+# to do: a quick look at the outliers and comparison between the majority  
+data %>%
+  filter(Annual_Premium>=55200) %>% 
+  summary() 
+  
+data %>%
+  filter(Annual_Premium>=55200) %>% 
+  apply(2,mean)
+
+# summary of mean premium by gender and age
+# set the proportion of data to keep outside confidence bands
+Q=0.1
+Prem_by_gen_age=cbind(
+                      data %>%
+                      filter(Annual_Premium<=55200) %>% 
+                      pivot_table(.rows = Age,
+                                  .columns = Gender,
+                                  .values = ~mean(Annual_Premium)) %>% 
+                       rename(Male=2,
+                              Female=3), 
+
+                      # lower band
+                      data %>%
+                      filter(Annual_Premium<=55200) %>% 
+                      pivot_table(.rows = Age,
+                                  .columns = Gender,
+                                  .values = ~quantile(Annual_Premium,probs=Q/2)) %>% 
+                      rename(Male_lower=2,
+                             Female_lower=3) %>% select(-Age), 
+
+                      # upper band
+                      data %>%
+                      filter(Annual_Premium<=55200) %>% 
+                      pivot_table(.rows = Age,
+                                  .columns = Gender,
+                                  .values = ~quantile(Annual_Premium,probs=1-Q/2)) %>% 
+                      rename(Male_upper=2,
+                             Female_upper=3) %>% select(-Age) 
+)
+
+# work in progress (to add confidence bands )
+Prem_by_gen_age[1:1000,] %>% 
+  ggplot(aes(x=Age,y=Annual_Premium))+
+  geom_point(aes(color=Gender))+
+  ggtitle("Distribution of mean premium by age")
+
+# mean premium profile 
+Prem_by_gen_age[,1:3] %>% 
+  gather(key = "Gender",
+         value="Premium",
+         -Age) %>% 
+  ggplot(aes(x=Age,y=Premium,Fill=Gender))+
+  geom_point()+
+  ggtitle("Distribution of mean premium by age")
+
+
 
 data %>%
   pivot_table(.rows = Age,
               .columns = Gender,
               .values = ~mean(Annual_Premium))
 
-data %>%
-  pivot_table(.rows = Age,
-              .columns = Gender,
-              .values = ~mean(Annual_Premium))
-
-
-
-
-# ///////////////////////////////////////
-# further data cleaning  ----
-# ///////////////////////////////////////
-
-
+# vintage variable - we need to split it, as the majority has small variance,
+# but it might be interesting to separate its tails
 data %>% 
   ggplot(aes(x=Vintage))+
   geom_density()+
   ggtitle("Density of Vintage variable")+
   xlab("")+
   ylab("")
+
+# ///////////////////////////////////////
+# further data cleaning  ----
+# ///////////////////////////////////////
+
 
 Vintages=data %>% 
   select(Vintage,Response)  %>%  
@@ -211,6 +280,9 @@ test_data=data[-sample,]
 # ///////////////////////////////////////
 # resampling to balance ----
 # ///////////////////////////////////////
+
+# the SMOTE function takes forever to execute. Since the package is officially archived, 
+# I might redo this algorithm 
 
 # NOT RUN
 # initial imbalance in the training set 16%
