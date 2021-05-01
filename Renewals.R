@@ -36,6 +36,7 @@ print(data)
 data=data %>% mutate(Policy_Sales_Channel=as.factor(Policy_Sales_Channel),
                      Region_Code=as.factor(Region_Code),
                      Driving_License=as.factor(Driving_License),
+                     Previously_Insured=as.factor(Previously_Insured),
                      # Response=as.factor(Response), # it is more convenient to do that just before modeling
                      Vehicle_Age=as.factor(Vehicle_Age),
                      Vehicle_Damage=as.factor((Vehicle_Damage=="Yes")*1),
@@ -56,6 +57,9 @@ rm(OneHot)
 # ///////////////////////////////////////
 # Initial EDA  ----
 # ///////////////////////////////////////
+# todos: correlations, visualization of car age/veh damage
+
+
 # Distribution of the response variable by gender
 data %>% mutate(Response=as.factor(Response)) %>% 
          ggplot(aes(x=Response))+
@@ -162,7 +166,15 @@ data %>%
   ggtitle("Regions with most renewals")
 
 # renewals by policy sales channel 
-# getting rid of vendors, which have less than K customers
+# there are 109 brokers (policy_sales_Channells) that have less than 
+# K=150 customers
+# their multitude is going to be handled later
+table(data$Policy_Sales_Channel) %>% 
+  as.data.frame() %>% 
+  rename(Policy_Sales_Channel=1,Customers=2) %>% 
+  arrange(-Customers)
+
+# getting rid of brokers, which have less than K customers
 K=150
 data %>%
   group_by(Policy_Sales_Channel) %>% 
@@ -174,8 +186,6 @@ data %>%
   ylab("Renewal Rate") +
   xlab("Broker ID") +
   ggtitle("Brokers and renewal rates")
-
-sum((data$Vintage<=25)*1 + (data$Vintage>=285)*1)/length(data$Vintage)
 
 # vintage variable - it should be split, as the majority has small variance,
 # but it might be interesting to separate its tails
@@ -202,55 +212,45 @@ data %>%
 # 11% of observations are outside of 25,285 interval
 sum((data$Vintage<=25)*1 + (data$Vintage>=285)*1)/length(data$Vintage)
 
-
 # excel style pivot table
 data %>%
   pivot_table(.rows = Age,
               .columns = Gender,
               .values = ~mean(Annual_Premium))
 
-
+# Dependencies
+# not suprisingly, the policy sales channels and regions are dependent
+chisq.test(
+  table(as.factor(data$Policy_Sales_Channel),
+        as.factor(data$Region_Code)))
 
 # Correlations
-correlations=cor(data[,-c(1,5,10)]) %>% as.data.frame()
-correlations*(correlations>=0.1)+correlations*(correlations<=-0.1)
+# correlations=cor(data %>% 
+#                    mutate(Gender=(Gender=="Female")*1) %>% 
+#                    select(Response,
+#                           Gender,
+#                           Driving_License,
+#                           Previously_Insured,
+#                           Vehicle_Damage,
+#                           Annual_Premium,
+#                           Vintage,
+#                           Car_Age_New,
+#                           Car_Age_Older,
+#                           Car_Age_Oldest)) %>% 
+#                   as.data.frame()
 
 # clean the env
-rm(Prem_by_gen_age,Q,K)
-# ///////////////////////////////////////
-# EDA ----
-# ///////////////////////////////////////
-
-
-
-# 4.
-ggplot(data_initial %>% select(Policy_Sales_Channel,Response)  %>% 
-         filter(Policy_Sales_Channel %ni% group_1) %>%  
-         group_by(Policy_Sales_Channel) %>% 
-         mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
-         summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
-         filter(Renewals>0) %>% 
-         as.data.frame(), 
-       aes(x=reorder(Policy_Sales_Channel,Renewals),y=Renewals))+
-  geom_bar(stat="identity")+
-  ggtitle("Renewals by region")+
-  xlab('Region code')+
-  ylab("Renewals proportion")
+rm(Q,K)
 
 # ///////////////////////////////////////
 # data cleaning  ----
 # ///////////////////////////////////////
 
-# like mentioned above - lets separate out the tails of this variable
-# Vintages=data %>% 
-#   select(Vintage,Response)  %>%  
-#   group_by(Vintage) %>%
-#   mutate(Count=n_distinct(Vintage))  %>% 
-#   summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
-#   as.data.frame()
-# 
-# rm(Vintages)
-# data=data %>% select(-Vintage)
+# like mentioned above - lets separate out the tails of Vintage variable
+data=data %>% 
+      mutate(Vintage_Up=(Vintage>=285)*1,
+                    Vintage_Down=(Vintage<=25)*1) %>% 
+      select(-Vintage)
 
 # cleaning the policy_sales_channel. 
 # There is too many of these channels, they differ on renewal rate and volume
@@ -271,7 +271,8 @@ Sales_channels %>%
                  filter(Count>75) %>% 
                  ggplot(aes(x=Renewals))+
                  geom_density()+
-                 ggtitle("Renewals distribution, by sales channel")+
+                 ggtitle("Density distribution of mean renewal rates",
+                         subtitle = "Means calc. by sales channel")+
                  xlab("")+
                  ylab("")
   
@@ -319,8 +320,10 @@ rm(Sales_channels_one_hot,sequen,lower,group_1,class_Sales_ch,Sales_channels)
 # Region variable one hot encoding 
 # unluckilly, we don't know much about these regions,
 # it might be a good idea to try to group them - to consider
+data %>% as.tibble()
+
 Regions=predict(dummyVars("~.",data=data$Region_Code %>% as.data.frame),
-                newdata=data$Region_Code %>% as.data.frame)
+                newdata=data$Region_Code %>% as.data.frame) # check if data type (dbl) shouldn't be changed to int or fct
 
 colnames(Regions)=paste(rep("Region",
                             length(unique(data$Region_Code))),
@@ -373,30 +376,69 @@ data$Age=Normalize(data$Age)
 # TBD
 
 # ///////////////////////////////////////
-# train/test split----
+# train/test split and formatting----
 # ///////////////////////////////////////
+# all binary variables are converted to factors
+data=data %>% 
+  select(-id) %>%
+  mutate(Response=as.factor(Response), # it is more convenient to do that just before modeling
+                     Gender=as.factor((Gender=="Female")*1)) %>% # it is more convenient for plotting 
+  mutate(across(c(7:74), factor)) %>% 
+  as.tibble() 
 
 sample=c(sample_frac(as.data.frame(1:nrow(data)),size = 0.8))[[1]]
 train_data=data[sample,]
 test_data=data[-sample,]
 
+# let's also sample the unchanged dataset for performance comparison
+data_initial=data_initial %>% 
+             select(-id) %>%
+             relocate(where(is.character)) %>% 
+             mutate(across(c(1:3,5:7,9:11),factor))
+
+train_data_initial=data[sample,]
+test_data_initial=data[-sample,]
+
 # ///////////////////////////////////////
 # Upsampling  ----
 # ///////////////////////////////////////
+# base case 
+
+# base case after cleaning and feature engineering
+train_data %>% 
+  group_by(Response) %>% 
+  summarise(n=n()) %>%
+  mutate(freq = n / sum(n))
 
 # there is no point to do proper resampling because of the low number of 
 # Response==1 cases and so, it might introduce too much noise 
 train_data_resampled=rbind(train_data,
                            train_data %>% filter(Response==1))
 
-# Random over sampling 
-train_data_ROSE=ROSE(Response ~ ., data=train_data[1:100000,], seed=seed)$data
+train_data_resampled %>% 
+  group_by(Response) %>% 
+  summarise(n=n()) %>%
+  mutate(freq = n / sum(n))
 
-# syntchetic minority oversampling
-# 
+# Random over sampling 
+# we have to correct for non-realistic outputs (negative premiums, or premiums lower than 2630) and 
+# outputs that break the previously outlined "rules" (eg. annual premium can't exceed 52000)
+# note - ROSE generates an entirely synthetic dataset
+# note - compared to the 'resampled' case above, this dataset is much larger 
+train_data_ROSE=rbind(train_data,
+                      ROSE(Response ~ ., 
+                           data=train_data, 
+                           seed=seed)$data %>% 
+                        rowwise() %>% 
+                      mutate(Annual_Premium=min(52000,
+                                                max(Annual_Premium,2630)),
+                             Premium_Surplus=max(Premium_Surplus,
+                                                 0)))
+
+# synthetic minority oversampling
 train_data_SMOTE=rbind(train_data,
                  SMOTE(form = Response ~ .,
-                       data = train_data[1:100000,] %>% select(-id) %>% mutate(Response=factor(Response)),
+                       data = train_data[1:10000,],
                        perc.over = 100,
                        perc.under = 0,
                        k=5))
