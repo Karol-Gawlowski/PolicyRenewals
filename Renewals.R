@@ -14,6 +14,7 @@ library(e1071)
 library(glmnet)
 library(remotes)
 library(reshape2)
+library(DALEX)
 
 options(digits=2)
 seed=100
@@ -90,7 +91,6 @@ quantile(data$Annual_Premium,probs=seq(0,1,by=0.05))
 sum(data$Annual_Premium==2630)/nrow(data)
 
 # Quick comparison between the high/low premium insureds
-
 data %>% 
   mutate(High_Prem=(Annual_Premium>=55200)*1) %>% 
   group_by(High_Prem) %>% 
@@ -114,50 +114,94 @@ data %>%
   # facet_grid(~LowPrem)
   
 # summary of mean premium by gender and age
-# set the proportion of data to keep outside confidence bands
-Q=0.1
-Prem_by_gen_age=cbind(
-                      data %>%
-                      filter(Annual_Premium<=55200) %>% 
-                      pivot_table(.rows = Age,
-                                  .columns = Gender,
-                                  .values = ~mean(Annual_Premium)) %>% 
-                       rename(Male=2,
-                              Female=3), 
+# set the proportion of data to keep outside the confidence bands
+Q=0.2
+# for 80% of observations the spread of the premiums 
+# doesn't allow to infer anything interesting
+data %>%
+  filter(Annual_Premium<=52000 & Annual_Premium>=2630) %>% 
+  select(Gender,Age,Annual_Premium) %>% 
+  group_by(Age,Gender) %>% 
+  summarise(
+    LowerBound=quantile(Annual_Premium,probs=Q/2),
+    Mean=mean(Annual_Premium),
+    UpperBound=quantile(Annual_Premium,probs=1-Q/2)
+  ) %>% 
+  ggplot(aes(x=Age,y=Mean,color=Gender))+
+  # geom_point()+
+  geom_line()+
+  geom_ribbon(aes(ymin=LowerBound,
+                  ymax=UpperBound),
+              alpha=0.3)+
+  ylab("Annual Premium") +
+  ggtitle("Annual Premium by Gender and Age",
+          subtitle = "")
 
-                      # lower band
-                      data %>%
-                      filter(Annual_Premium<=55200) %>% 
-                      pivot_table(.rows = Age,
-                                  .columns = Gender,
-                                  .values = ~quantile(Annual_Premium,probs=Q/2)) %>% 
-                      rename(Male_lower=2,
-                             Female_lower=3) %>% select(-Age), 
+# renewals by age
+# between 25-30% of people aged 30-50 renew/buy the insurance
+data %>%
+  group_by(Gender,Age) %>% 
+  summarise(Renewals=mean(Response)) %>% 
+  ggplot(aes(x=Age,y=Renewals,color=Gender))+
+  geom_line()+  
+  ylab("Renewal Rate") +
+  ggtitle("Renewal Rate by Age and Gender")
 
-                      # upper band
-                      data %>%
-                      filter(Annual_Premium<=55200) %>% 
-                      pivot_table(.rows = Age,
-                                  .columns = Gender,
-                                  .values = ~quantile(Annual_Premium,probs=1-Q/2)) %>% 
-                      rename(Male_upper=2,
-                             Female_upper=3) %>% select(-Age) 
-)
+# renewals by region
+# it appears that the region with the largest client base (region 28), is also the 2nd best 
+# when it comes to renewal rate
+data %>%
+  group_by(Region_Code) %>% 
+  summarise(RegionPopulation=n(),
+            Renewals=mean(Response)) %>%  # arrange(-Renewals) %>% print(n=100)
+  # filter(Renewals>mean(Renewals)) %>% 
+  ggplot(aes(x=reorder(Region_Code,Renewals),y=Renewals,fill=RegionPopulation))+
+  geom_bar(stat="identity")+
+  ylab("Renewal Rate") +
+  xlab("Region Code") +
+  ggtitle("Regions with most renewals")
 
-# work in progress (to add confidence bands )
-Prem_by_gen_age[1:1000,] %>% 
-  ggplot(aes(x=Age,y=Annual_Premium))+
-  geom_point(aes(color=Gender))+
-  ggtitle("Distribution of mean premium by age")
+# renewals by policy sales channel 
+# getting rid of vendors, which have less than K customers
+K=150
+data %>%
+  group_by(Policy_Sales_Channel) %>% 
+  summarise(Customers=n(),
+            Renewals=mean(Response)) %>%  # arrange(-Customers) %>% print(n=100)
+  filter(Customers>K) %>%
+  ggplot(aes(x=reorder(Policy_Sales_Channel,Renewals),y=Renewals,fill=Customers))+
+  geom_bar(stat="identity")+
+  ylab("Renewal Rate") +
+  xlab("Broker ID") +
+  ggtitle("Brokers and renewal rates")
 
-# mean premium profile by gendar and age
-Prem_by_gen_age[,1:3] %>% 
-  gather(key = "Gender",
-         value="Premium",
-         -Age) %>% 
-  ggplot(aes(x=Age,y=Premium,Fill=Gender))+
-  geom_point()+
-  ggtitle("Distribution of mean premium by age")
+sum((data$Vintage<=25)*1 + (data$Vintage>=285)*1)/length(data$Vintage)
+
+# vintage variable - it should be split, as the majority has small variance,
+# but it might be interesting to separate its tails
+# note - we don't know the meaning of this variable + it appears as it has 
+# been later deleted from kaggle 
+# the horizontal dashed lines at 25 and 285 indicate the tails of the variable which
+# seem to contain some information, other than the majority of the variable 
+data %>% 
+  ggplot(aes(x=Vintage))+
+  geom_density()+
+  geom_vline(xintercept=25, 
+             color = "#FC4E08", 
+             linetype = "dashed", 
+             size = 0.5)+
+  geom_vline(xintercept=285, 
+             color = "#FC4E08", 
+             linetype = "dashed", 
+             size = 0.5)+
+  xlab("")+
+  ylab("")+
+  ggtitle("Density of Vintage variable",
+          subtitle = "dashed lines for x={25,285}")
+
+# 11% of observations are outside of 25,285 interval
+sum((data$Vintage<=25)*1 + (data$Vintage>=285)*1)/length(data$Vintage)
+
 
 # excel style pivot table
 data %>%
@@ -165,67 +209,19 @@ data %>%
               .columns = Gender,
               .values = ~mean(Annual_Premium))
 
-# vintage variable - it should be split, as the majority has small variance,
-# but it might be interesting to separate its tails
-data %>% 
-  ggplot(aes(x=Vintage))+
-  geom_density()+
-  ggtitle("Density of Vintage variable")+
-  xlab("")+
-  ylab("")
+
+
+# Correlations
+correlations=cor(data[,-c(1,5,10)]) %>% as.data.frame()
+correlations*(correlations>=0.1)+correlations*(correlations<=-0.1)
 
 # clean the env
-rm(Prem_by_gen_age,Q)
-
-
+rm(Prem_by_gen_age,Q,K)
 # ///////////////////////////////////////
 # EDA ----
 # ///////////////////////////////////////
 
-# Correlations
-correlations=cor(train_data[,-c(1,5,10)]) %>% as.data.frame()
-correlations*(correlations>=0.1)+correlations*(correlations<=-0.1)
 
-# check conditional plots/statistics given someone actually renewed the policy or not
-
-summary(train_data[,-1] %>% filter(Response==1))
-summary(train_data[,-1] %>% filter(Response==0))
-
-Renewal_yes=train_data[,-1] %>% filter(Response==1)
-Renewal_no=train_data[,-1] %>% filter(Response==0)
-
-# Plots
-# 1.
-# split of renewals by age suggests  that for ages approx 20-30 people don't renew (peak around 23)
-# but for ages 30-60 they do (peak around 45)
-#further splits by age conditional on gender or on premium found not to be significant
-ggplot(train_data ,aes(x=Age))+
-  geom_density(aes(colour=factor(Response)),size=1)+
-  ggtitle("Renewals by Age")
-
-ggplot(train_data_resampled ,aes(x=Age))+
-  geom_density(aes(colour=factor(Response)),size=1)+
-  ggtitle("Renewals by Age (resampled)")
-
-# 2.
-# renewals by region
-# there are regions with renewal rate above 20% and up to ~27.5%
-train_data_for_histogram=data_initial %>% select(Response,Region_Code) %>% group_by(Region_Code) %>% summarise(Renewals=mean(Response)) %>% as.data.frame()
-train_data_for_histogram=train_data_for_histogram[order(train_data_for_histogram$Renewals),]
-
-ggplot(train_data_for_histogram, aes(x=reorder(Region_Code,Renewals),y=Renewals))+
-  geom_bar(stat="identity")+
-  ggtitle("Renewals by region")
-
-# 3.
-# renewals by region and gender (mostly the same distribution)
-ggplot(data_initial %>% select(Response,Region_Code,Gender) %>% group_by(Region_Code,Gender) %>% 
-         summarise(Renewals=mean(Response)) %>% as.data.frame(), 
-       aes(x=reorder(Region_Code,Renewals),y=Renewals,fill=factor(Gender)))+
-  geom_bar(stat="identity")+
-  ggtitle("Renewals by region",subtitle = "Split by Gender")+
-  xlab('Region code')+
-  ylab("Renewals proportion")
 
 # 4.
 ggplot(data_initial %>% select(Policy_Sales_Channel,Response)  %>% 
@@ -240,16 +236,6 @@ ggplot(data_initial %>% select(Policy_Sales_Channel,Response)  %>%
   ggtitle("Renewals by region")+
   xlab('Region code')+
   ylab("Renewals proportion")
-
-# 5.
-# those who renew are offered basically the same premium 
-ggplot(data_initial ,aes(x=Annual_Premium))+
-  geom_density(aes(colour=factor(Response)),size=1)+
-  ggtitle("Renewals by annual premium") +
-  xlim(0,100000)
-
-
-
 
 # ///////////////////////////////////////
 # data cleaning  ----
