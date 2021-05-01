@@ -435,38 +435,16 @@ train_data_ROSE=rbind(train_data,
                              Premium_Surplus=max(Premium_Surplus,
                                                  0)))
 
-# synthetic minority oversampling
-train_data_SMOTE=rbind(train_data,
-                 SMOTE(form = Response ~ .,
-                       data = train_data[1:10000,],
-                       perc.over = 100,
-                       perc.under = 0,
-                       k=5))
-
-
+# synthetic minority oversampling - todo
 # the SMOTE function takes forever to execute. Since the package is officially archived, 
 # I might redo this algorithm 
-
-# NOT RUN
-# initial imbalance in the training set 16%
-# mean(train_data$Response)
-# 
-# train_data=rbind(train_data,
-#                  SMOTE(form = Response ~ ., 
-#                        data = train_data %>% select(-id) %>% mutate(Response=factor(Response)), 
-#                        perc.over = 200, 
+# train_data_SMOTE=rbind(train_data,
+#                  SMOTE(form = Response ~ .,
+#                        data = train_data,
+#                        perc.over = 100,
 #                        perc.under = 0,
 #                        k=5))
-#   
-# 
-# nrow(a)
-# 
-# summary(a)
-# summary(train_data[1:1000,])
-# 
-# mean(as.numeric(a$Response)-1)
-# 
-# tail(a)
+
 
 # ///////////////////////////////////////
 # Modeling - setting up ---- <- NOT RUN, STILL IN DEVELOPMENT
@@ -481,9 +459,6 @@ trControl = trainControl(
   method = "repeatedcv",
   number = 2,
   repeats = 2)
-
-# ## When you are done:
-# stopCluster(cl)
 
 
 train(x=train_data,
@@ -609,7 +584,7 @@ NeuralNet_Resampled_ROC=roc(predictor = predict(NeuralNet_Resampled,
     plot = TRUE,
     ret=TRUE)
   
-# sth aint workin
+
 # Random Forest
 RandomForest = train(Response ~ ., data = train_data %>% select(-id) %>% mutate(Response=as.factor(Response)), 
                             trControl = trControl,
@@ -620,7 +595,7 @@ Predict_RandomForest=predict(RandomForest,
                                     test_data %>% select(-id,-Response),
                                     type = "prob")
 
-# STH AINT WORKING
+
 RandomForest_reg_fact=as.factor((predict(RandomForest,
                                                         test_data %>% select(-id,-Response),
                                                         type = "raw")[,2] > treshold_RF)*1)
@@ -637,6 +612,12 @@ Random_Forest_ROC=roc(predictor = predict(RandomForest_reg_fact,
 
 
 
+# turn of parallel computing
+stopCluster(cl)
+
+# ///////////////////////////////////////
+# XAI ----
+# ///////////////////////////////////////
 
 
 
@@ -645,19 +626,12 @@ Random_Forest_ROC=roc(predictor = predict(RandomForest_reg_fact,
 # ///////////////////////////////////////
 
 
-
-
 # check if the dependency eg on age is linear and whether there is a significant difference among two groups
 # if yes - then add +/-1 to the age (thus create two extra data instances that bought the policy)
-
-
-
 
 # Pre-processing - PCA, LDA/QDA + Logistic Regression, NN, RF
 
 # Neural network -> logistic regression (like suggested by Mario Wutrich)
-
-
 
 # Explainability
 
