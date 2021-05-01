@@ -3,8 +3,9 @@
 # ///////////////////////////////////////
 # Initialization ----
 # ///////////////////////////////////////
-install_version("DMwR", "0.4.1") #Package ‘DMwR’ was removed from the CRAN repository.
-library(DMwR)
+# install_version("DMwR", "0.4.1") #Package ‘DMwR’ was removed from the CRAN repository.
+library(DMwR) # incl. SMOTE - Synthetic Minority Oversampling TEchnique - Nitesh Chawla, et al. 2002 
+library(ROSE) # incl ROSE - Training and assessing classification rules with unbalanced data Menardi G.,Torelli N. 2013
 library(tidyverse)
 library(tidyquant)
 library(caret)
@@ -15,7 +16,8 @@ library(remotes)
 library(reshape2)
 
 options(digits=2)
-set.seed(100)
+seed=100
+set.seed(seed)
 
 # Upload data
 # Source: https://www.kaggle.com/arashnic/imbalanced-data-practice?select=aug_train.csv
@@ -26,17 +28,18 @@ data_initial=as.data.frame(read.csv("aug_train.csv")) %>% as_tibble()
 data=data_initial %>% arrange(id)
 
 # there are no missing data
-sum(is.na(data))==1
+sum(is.na(data))==0
 print(data)
 
 # change data type to factors where necessary and apply binary encoding
 data=data %>% mutate(Policy_Sales_Channel=as.factor(Policy_Sales_Channel),
                      Region_Code=as.factor(Region_Code),
                      Driving_License=as.factor(Driving_License),
-                     Response=as.factor(Response),
+                     # Response=as.factor(Response), # it is more convenient to do that just before modeling
                      Vehicle_Age=as.factor(Vehicle_Age),
                      Vehicle_Damage=as.factor((Vehicle_Damage=="Yes")*1),
-                     Gender=as.factor((Gender=="Female")*1))
+                     # Gender=as.factor((Gender=="Female")*1) # it is more convenient for plotting 
+                     )
 
 # one hot encoding of vehicle_age
 OneHot = dummyVars("~ Vehicle_Age", data=data) %>% 
@@ -53,55 +56,63 @@ rm(OneHot)
 # Initial EDA  ----
 # ///////////////////////////////////////
 # Distribution of the response variable by gender
-data %>% 
-  ggplot(aes(x=Response))+
-  geom_bar(aes(y = (..count..)/sum(..count..)))+
-  scale_y_continuous(labels=scales::percent) +
-  facet_grid(~Gender)+
-  ylab("") +
-  ggtitle("Distribution of the response variable",
-          subtitle = "It's an imbalanced dataset")
+data %>% mutate(Response=as.factor(Response)) %>% 
+         ggplot(aes(x=Response))+
+         geom_bar(aes(y = (..count..)/sum(..count..)))+
+         scale_y_continuous(labels=scales::percent) +
+         facet_grid(~Gender)+
+         ylab("") +
+         ggtitle("Distribution of the response variable",
+                 subtitle = "It's an imbalanced dataset")
 
 # Regions with the highest renewal rates by gender
 data %>% 
-  mutate(Response=as.integer(Response)-1) %>% 
   select(Region_Code,Response,Gender) %>% 
   pivot_table(.rows = Region_Code,
               .columns = Gender,
               .values = ~mean(Response)) %>% 
-  rename(Male=2,
-         Female=3) %>% 
   arrange(-Female,-Male)
 
 # Regions with the highest mean premium 
 data %>% 
-  # mutate(Response=as.integer(Response)-1) %>% 
   select(Region_Code,Annual_Premium,Gender) %>% 
   pivot_table(.rows = Region_Code,
               .columns = Gender,
               .values = ~mean(Annual_Premium)) %>% 
-  rename(Male=2,
-         Female=3) %>% 
   arrange(-Female,-Male)
 
-
-
-# we note that there are policyholders with very high premiums,
-# for the needs of the preliminary EDA, we will focus on the 95% of observations 
+# note that there are policyholders with very high premiums,
+# for the needs of the preliminary EDA, lets focus on the 95% of observations 
 # below 55 200 annual premium
 quantile(data$Annual_Premium,probs=seq(0,1,by=0.05))
+
 # and it appears that 16% of the insureds pay 2630 
 sum(data$Annual_Premium==2630)/nrow(data)
 
-# to do: a quick look at the outliers and comparison between the majority  
-data %>%
-  filter(Annual_Premium>=55200) %>% 
-  summary() 
-  
-data %>%
-  filter(Annual_Premium>=55200) %>% 
-  apply(2,mean)
+# Quick comparison between the high/low premium insureds
 
+data %>% 
+  mutate(High_Prem=(Annual_Premium>=55200)*1) %>% 
+  group_by(High_Prem) %>% 
+  summarise(n=n(),
+            Renewals=mean(Response),
+            Females=mean(Gender=="Female"),
+            Age=mean(Age),
+            D_License=mean(Driving_License==1),
+            New_cars=mean(Car_Age_New),
+            Older_cars=mean(Car_Age_Older),
+            Oldest_cars=mean(Car_Age_Oldest))
+# work in progress to plot the above table 
+#           ) %>% 
+  # t() %>% 
+  # as.data.frame() %>% 
+  # rownames_to_column() %>% 
+  # rename(Variable=1,LowPrem=2,HighPrem=3) %>% 
+  # gather("Lowprem","HighPrem",-Variable) %>% 
+  # ggplot(aes(x=Variable))+
+  # barplot(y=HighPrem)+
+  # facet_grid(~LowPrem)
+  
 # summary of mean premium by gender and age
 # set the proportion of data to keep outside confidence bands
 Q=0.1
@@ -154,7 +165,7 @@ data %>%
               .columns = Gender,
               .values = ~mean(Annual_Premium))
 
-# vintage variable - we need to split it, as the majority has small variance,
+# vintage variable - it should be split, as the majority has small variance,
 # but it might be interesting to separate its tails
 data %>% 
   ggplot(aes(x=Vintage))+
@@ -166,11 +177,85 @@ data %>%
 # clean the env
 rm(Prem_by_gen_age,Q)
 
+
+# ///////////////////////////////////////
+# EDA ----
+# ///////////////////////////////////////
+
+# Correlations
+correlations=cor(train_data[,-c(1,5,10)]) %>% as.data.frame()
+correlations*(correlations>=0.1)+correlations*(correlations<=-0.1)
+
+# check conditional plots/statistics given someone actually renewed the policy or not
+
+summary(train_data[,-1] %>% filter(Response==1))
+summary(train_data[,-1] %>% filter(Response==0))
+
+Renewal_yes=train_data[,-1] %>% filter(Response==1)
+Renewal_no=train_data[,-1] %>% filter(Response==0)
+
+# Plots
+# 1.
+# split of renewals by age suggests  that for ages approx 20-30 people don't renew (peak around 23)
+# but for ages 30-60 they do (peak around 45)
+#further splits by age conditional on gender or on premium found not to be significant
+ggplot(train_data ,aes(x=Age))+
+  geom_density(aes(colour=factor(Response)),size=1)+
+  ggtitle("Renewals by Age")
+
+ggplot(train_data_resampled ,aes(x=Age))+
+  geom_density(aes(colour=factor(Response)),size=1)+
+  ggtitle("Renewals by Age (resampled)")
+
+# 2.
+# renewals by region
+# there are regions with renewal rate above 20% and up to ~27.5%
+train_data_for_histogram=data_initial %>% select(Response,Region_Code) %>% group_by(Region_Code) %>% summarise(Renewals=mean(Response)) %>% as.data.frame()
+train_data_for_histogram=train_data_for_histogram[order(train_data_for_histogram$Renewals),]
+
+ggplot(train_data_for_histogram, aes(x=reorder(Region_Code,Renewals),y=Renewals))+
+  geom_bar(stat="identity")+
+  ggtitle("Renewals by region")
+
+# 3.
+# renewals by region and gender (mostly the same distribution)
+ggplot(data_initial %>% select(Response,Region_Code,Gender) %>% group_by(Region_Code,Gender) %>% 
+         summarise(Renewals=mean(Response)) %>% as.data.frame(), 
+       aes(x=reorder(Region_Code,Renewals),y=Renewals,fill=factor(Gender)))+
+  geom_bar(stat="identity")+
+  ggtitle("Renewals by region",subtitle = "Split by Gender")+
+  xlab('Region code')+
+  ylab("Renewals proportion")
+
+# 4.
+ggplot(data_initial %>% select(Policy_Sales_Channel,Response)  %>% 
+         filter(Policy_Sales_Channel %ni% group_1) %>%  
+         group_by(Policy_Sales_Channel) %>% 
+         mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
+         summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
+         filter(Renewals>0) %>% 
+         as.data.frame(), 
+       aes(x=reorder(Policy_Sales_Channel,Renewals),y=Renewals))+
+  geom_bar(stat="identity")+
+  ggtitle("Renewals by region")+
+  xlab('Region code')+
+  ylab("Renewals proportion")
+
+# 5.
+# those who renew are offered basically the same premium 
+ggplot(data_initial ,aes(x=Annual_Premium))+
+  geom_density(aes(colour=factor(Response)),size=1)+
+  ggtitle("Renewals by annual premium") +
+  xlim(0,100000)
+
+
+
+
 # ///////////////////////////////////////
 # data cleaning  ----
 # ///////////////////////////////////////
 
-# like above - we have to separate out the tails of this variable
+# like mentioned above - lets separate out the tails of this variable
 # Vintages=data %>% 
 #   select(Vintage,Response)  %>%  
 #   group_by(Vintage) %>%
@@ -181,11 +266,11 @@ rm(Prem_by_gen_age,Q)
 # rm(Vintages)
 # data=data %>% select(-Vintage)
 
-# we have to clean the policy_sales_channel. 
+# cleaning the policy_sales_channel. 
 # There is too many of these channels, they differ on renewal rate and volume
 # we don't know anything specific about the sales channels which have low sales volume
 Sales_channels=data %>% 
-               mutate(Response=as.integer(Response)-1) %>% 
+               # mutate(Response=as.integer(Response)-1) %>% 
                select(Policy_Sales_Channel,Response)  %>%  
                group_by(Policy_Sales_Channel) %>%
                mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
@@ -193,7 +278,7 @@ Sales_channels=data %>%
                arrange(-Count,-Renewals) %>% 
                as.data.frame()
 
-# Based on the density plot below and the above observations, we propose 10 groups
+# Based on the density plot below and the above observations, I suggest propose 10 groups
 # 1 group for the policy sales channels <=75 sales volume
 # further 9 grpups based on the Renewal rate: 0-0.05; 0.05-0.1 and so on up to 0.45 
 Sales_channels %>% 
@@ -264,11 +349,11 @@ rm(Regions)
 
 # Annual premium
 # there are instances with very high premium but less than 5% observations are above k=52,000 
-# we observe, that the renewal rate is 25% higher in case of high premium instances
+# notice, that the renewal rate is 25% higher in case of high premium instances
 k=52000
 quantile(data$Annual_Premium ,probs = seq(0,1,by=0.05))
 
-data %>% mutate(Response=as.integer(Response)-1) %>% 
+data %>% #mutate(Response=as.integer(Response)-1) %>% 
          select(Annual_Premium,Response) %>% 
          mutate(Indicator=(Annual_Premium>k)*1) %>% 
          group_by(Indicator) %>%
@@ -276,10 +361,12 @@ data %>% mutate(Response=as.integer(Response)-1) %>%
 
 # Create an additional column of values in excess of k 
 # works more efficiently through use of indicator, than rowwise function
-Premiums=data %>% select(Annual_Premium) %>% mutate(Indicator=(Annual_Premium>k)*1,
-                                                    Premium_Surplus=Indicator*(Annual_Premium-k),
-                                                    Annual_Premium=Annual_Premium-Premium_Surplus) %>% 
-                                             select(-Indicator)
+Premiums=data %>% 
+  select(Annual_Premium) %>% 
+  mutate(Indicator=(Annual_Premium>k)*1,
+         Premium_Surplus=Indicator*(Annual_Premium-k),
+         Annual_Premium=Annual_Premium-Premium_Surplus) %>% 
+  select(-Indicator)
 
 # Normalization (remember to run the function.R script first)
 Premiums$Premium_Surplus=Normalize(Premiums$Premium_Surplus)
@@ -308,8 +395,26 @@ train_data=data[sample,]
 test_data=data[-sample,]
 
 # ///////////////////////////////////////
-# resampling to balance ----
+# Upsampling  ----
 # ///////////////////////////////////////
+
+# there is no point to do proper resampling because of the low number of 
+# Response==1 cases and so, it might introduce too much noise 
+train_data_resampled=rbind(train_data,
+                           train_data %>% filter(Response==1))
+
+# Random over sampling 
+train_data_ROSE=ROSE(Response ~ ., data=train_data[1:100000,], seed=seed)$data
+
+# syntchetic minority oversampling
+# 
+train_data_SMOTE=rbind(train_data,
+                 SMOTE(form = Response ~ .,
+                       data = train_data[1:100000,] %>% select(-id) %>% mutate(Response=factor(Response)),
+                       perc.over = 100,
+                       perc.under = 0,
+                       k=5))
+
 
 # the SMOTE function takes forever to execute. Since the package is officially archived, 
 # I might redo this algorithm 
@@ -334,76 +439,6 @@ test_data=data[-sample,]
 # mean(as.numeric(a$Response)-1)
 # 
 # tail(a)
-
-# ///////////////////////////////////////
-# EDA ----
-# ///////////////////////////////////////
-
-# Correlations
-correlations=cor(train_data[,-c(1,5,10)]) %>% as.data.frame()
-correlations*(correlations>=0.1)+correlations*(correlations<=-0.1)
-
-# check conditional plots/statistics given someone actually renewed the policy or not
-
-summary(train_data[,-1] %>% filter(Response==1))
-summary(train_data[,-1] %>% filter(Response==0))
-
-Renewal_yes=train_data[,-1] %>% filter(Response==1)
-Renewal_no=train_data[,-1] %>% filter(Response==0)
-
-# Plots
-# 1.
-# split of renewals by age suggests  that for ages approx 20-30 people don't renew (peak around 23)
-# but for ages 30-60 they do (peak around 45)
-#further splits by age conditional on gender or on premium found not to be significant
-ggplot(train_data ,aes(x=Age))+
-                                geom_density(aes(colour=factor(Response)),size=1)+
-                                ggtitle("Renewals by Age")
-
-ggplot(train_data_resampled ,aes(x=Age))+
-                                geom_density(aes(colour=factor(Response)),size=1)+
-                                ggtitle("Renewals by Age (resampled)")
-
-# 2.
-# renewals by region
-# there are regions with renewal rate above 20% and up to ~27.5%
-train_data_for_histogram=data_initial %>% select(Response,Region_Code) %>% group_by(Region_Code) %>% summarise(Renewals=mean(Response)) %>% as.data.frame()
-train_data_for_histogram=train_data_for_histogram[order(train_data_for_histogram$Renewals),]
-
-ggplot(train_data_for_histogram, aes(x=reorder(Region_Code,Renewals),y=Renewals))+
-                                geom_bar(stat="identity")+
-                                ggtitle("Renewals by region")
-
-# 3.
-# renewals by region and gender (mostly the same distribution)
-ggplot(data_initial %>% select(Response,Region_Code,Gender) %>% group_by(Region_Code,Gender) %>% 
-                          summarise(Renewals=mean(Response)) %>% as.data.frame(), 
-                                aes(x=reorder(Region_Code,Renewals),y=Renewals,fill=factor(Gender)))+
-                                geom_bar(stat="identity")+
-                                ggtitle("Renewals by region",subtitle = "Split by Gender")+
-                                xlab('Region code')+
-                                ylab("Renewals proportion")
-
-# 4.
-ggplot(data_initial %>% select(Policy_Sales_Channel,Response)  %>% 
-                        filter(Policy_Sales_Channel %ni% group_1) %>%  
-                        group_by(Policy_Sales_Channel) %>% 
-                        mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
-                        summarise(Renewals=mean(Response), Count=sum(Count)) %>% 
-                        filter(Renewals>0) %>% 
-                        as.data.frame(), 
-                          aes(x=reorder(Policy_Sales_Channel,Renewals),y=Renewals))+
-                                geom_bar(stat="identity")+
-                                ggtitle("Renewals by region")+
-                                xlab('Region code')+
-                                ylab("Renewals proportion")
-
-# 5.
-# those who renew are offered basically the same premium 
-ggplot(data_initial ,aes(x=Annual_Premium))+
-                                geom_density(aes(colour=factor(Response)),size=1)+
-                                ggtitle("Renewals by annual premium") +
-                                xlim(0,100000)
 
 # ///////////////////////////////////////
 # Modeling - setting up ---- <- NOT RUN, STILL IN DEVELOPMENT
