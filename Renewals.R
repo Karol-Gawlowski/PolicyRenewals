@@ -4,8 +4,7 @@
 # Initialization ----
 # ///////////////////////////////////////
 # install_version("DMwR", "0.4.1") #Package ‘DMwR’ was removed from the CRAN repository.
-library(DMwR) # incl. SMOTE - Synthetic Minority Oversampling TEchnique - Nitesh Chawla, et al. 2002 
-library(ROSE) # incl ROSE - Training and assessing classification rules with unbalanced data Menardi G.,Torelli N. 2013
+# install_version("FCNN4R", "0.6.2") #Package ‘FCNN4R’ was removed from the CRAN repository.
 library(tidyverse)
 library(tidyquant)
 library(caret)
@@ -15,18 +14,23 @@ library(glmnet)
 library(remotes)
 library(reshape2)
 library(DALEX)
+library(FCNN4R) # neural network with SGD and hyperparams
+library(DMwR) # incl. SMOTE - Synthetic Minority Oversampling TEchnique - Nitesh Chawla, et al. 2002 
+library(ROSE) # incl ROSE - Training and assessing classification rules with unbalanced data Menardi G.,Torelli N. 2013
 
 options(digits=2)
 seed=100
 set.seed(seed)
+
+# Remember to run functions.R first
 
 # Upload data
 # Source: https://www.kaggle.com/arashnic/imbalanced-data-practice?select=aug_train.csv
 # the testing dataset provided on the link mentioned above did not contain the actual values 
 # "Response" is the target variable indicating whether a customer was successfully acquired
 # "Policy_Sales_Channel" - insurance broker
-data_initial=as.data.frame(read.csv("aug_train.csv")) %>% as_tibble()
-data=data_initial %>% arrange(id)
+data_initial=as.data.frame(read.csv("aug_train.csv")) %>% as_tibble() %>% arrange(id)
+data=data_initial 
 
 # there are no missing data
 sum(is.na(data))==0
@@ -35,13 +39,13 @@ print(data)
 # change data type to factors where necessary and apply binary encoding
 data=data %>% mutate(Policy_Sales_Channel=as.factor(Policy_Sales_Channel),
                      Region_Code=as.factor(Region_Code),
-                     Driving_License=as.factor(Driving_License),
-                     Previously_Insured=as.factor(Previously_Insured),
-                     # Response=as.factor(Response), # it is more convenient to do that just before modeling
-                     Vehicle_Age=as.factor(Vehicle_Age),
-                     Vehicle_Damage=as.factor((Vehicle_Damage=="Yes")*1),
-                     # Gender=as.factor((Gender=="Female")*1) # it is more convenient for plotting 
-                     )
+                     # Driving_License=as.factor(Driving_License),
+                     # Previously_Insured=as.factor(Previously_Insured),
+                     Response=as.factor(Response), # it is more convenient to do that just before modeling
+                     # Vehicle_Age=integer(Vehicle_Age),
+                     Vehicle_Damage=(Vehicle_Damage=="Yes")*1,
+                     Gender=as.factor(Gender)
+                     ) %>% as.tibble()
 
 # one hot encoding of vehicle_age
 OneHot = dummyVars("~ Vehicle_Age", data=data) %>% 
@@ -61,8 +65,7 @@ rm(OneHot)
 
 
 # Distribution of the response variable by gender
-data %>% mutate(Response=as.factor(Response)) %>% 
-         ggplot(aes(x=Response))+
+data %>% ggplot(aes(x=Response))+
          geom_bar(aes(y = (..count..)/sum(..count..)))+
          scale_y_continuous(labels=scales::percent) +
          facet_grid(~Gender)+
@@ -73,6 +76,7 @@ data %>% mutate(Response=as.factor(Response)) %>%
 # Regions with the highest renewal rates by gender
 data %>% 
   select(Region_Code,Response,Gender) %>% 
+  mutate(Response=as.integer(as.character(Response))) %>% 
   pivot_table(.rows = Region_Code,
               .columns = Gender,
               .values = ~mean(Response)) %>% 
@@ -96,7 +100,8 @@ sum(data$Annual_Premium==2630)/nrow(data)
 
 # Quick comparison between the high/low premium insureds
 data %>% 
-  mutate(High_Prem=(Annual_Premium>=55200)*1) %>% 
+  mutate(High_Prem=(Annual_Premium>=55200)*1,
+         Response=as.integer(as.character(Response))) %>% 
   group_by(High_Prem) %>% 
   summarise(n=n(),
             Renewals=mean(Response),
@@ -144,6 +149,7 @@ data %>%
 # renewals by age
 # between 25-30% of people aged 30-50 renew/buy the insurance
 data %>%
+  mutate(Response=as.integer(as.character(Response))) %>% 
   group_by(Gender,Age) %>% 
   summarise(Renewals=mean(Response)) %>% 
   ggplot(aes(x=Age,y=Renewals,color=Gender))+
@@ -155,6 +161,7 @@ data %>%
 # it appears that the region with the largest client base (region 28), is also the 2nd best 
 # when it comes to renewal rate
 data %>%
+  mutate(Response=as.integer(as.character(Response))) %>% 
   group_by(Region_Code) %>% 
   summarise(RegionPopulation=n(),
             Renewals=mean(Response)) %>%  # arrange(-Renewals) %>% print(n=100)
@@ -177,6 +184,7 @@ table(data$Policy_Sales_Channel) %>%
 # getting rid of brokers, which have less than K customers
 K=150
 data %>%
+  mutate(Response=as.integer(as.character(Response))) %>% 
   group_by(Policy_Sales_Channel) %>% 
   summarise(Customers=n(),
             Renewals=mean(Response)) %>%  # arrange(-Customers) %>% print(n=100)
@@ -252,11 +260,13 @@ data=data %>%
                     Vintage_Down=(Vintage<=25)*1) %>% 
       select(-Vintage)
 
+summary(data)
+
 # cleaning the policy_sales_channel. 
 # There is too many of these channels, they differ on renewal rate and volume
 # we don't know anything specific about the sales channels which have low sales volume
 Sales_channels=data %>% 
-               # mutate(Response=as.integer(Response)-1) %>% 
+               mutate(Response=as.integer(as.character(Response))) %>% 
                select(Policy_Sales_Channel,Response)  %>%  
                group_by(Policy_Sales_Channel) %>%
                mutate(Count=n_distinct(Policy_Sales_Channel))  %>% 
@@ -268,7 +278,7 @@ Sales_channels=data %>%
 # 1 group for the policy sales channels <=75 sales volume
 # further 9 grpups based on the Renewal rate: 0-0.05; 0.05-0.1 and so on up to 0.45 
 Sales_channels %>% 
-                 filter(Count>75) %>% 
+                 filter(Count>10) %>%
                  ggplot(aes(x=Renewals))+
                  geom_density()+
                  ggtitle("Density distribution of mean renewal rates",
@@ -276,12 +286,22 @@ Sales_channels %>%
                  xlab("")+
                  ylab("")
   
+# ///////////////////////////////////////
+# feature engineering  ----
+# ///////////////////////////////////////
+
 # The classification is output as one-hot encoding 
 data$Policy_Sales_Channel=data$Policy_Sales_Channel %>% as.matrix() %>% as.integer()
 Sales_channels_one_hot=matrix(ncol=10,nrow=nrow(data))
 
-# first group, for channels with volume of <= 75 clients
-group_1=Sales_channels %>% filter(Count<=75) %>% select(Policy_Sales_Channel) %>% as.matrix() %>% as.integer()
+# which brokers have volume of <= 75 clients (to put in the 1st group)
+group_1=Sales_channels %>% 
+        filter(Count<=75) %>% 
+        select(Policy_Sales_Channel) %>% 
+        as.matrix() %>% 
+        as.integer()
+
+# binary encoding of the first group
 Sales_channels_one_hot[,1]=c(apply(data$Policy_Sales_Channel == matrix(data=rep(x=group_1,length(data$Policy_Sales_Channel)),
                                              nrow=length(data$Policy_Sales_Channel),
                                              ncol=length(group_1)),1,sum) %>% as.data.frame())[[1]]
@@ -320,10 +340,11 @@ rm(Sales_channels_one_hot,sequen,lower,group_1,class_Sales_ch,Sales_channels)
 # Region variable one hot encoding 
 # unluckilly, we don't know much about these regions,
 # it might be a good idea to try to group them - to consider
+
 data %>% as.tibble()
 
-Regions=predict(dummyVars("~.",data=data$Region_Code %>% as.data.frame),
-                newdata=data$Region_Code %>% as.data.frame) # check if data type (dbl) shouldn't be changed to int or fct
+Regions=predict(dummyVars("~Region_Code",data=data),
+                newdata=data %>% as.data.frame) # check if data type (dbl) shouldn't be changed to int or fct
 
 colnames(Regions)=paste(rep("Region",
                             length(unique(data$Region_Code))),
@@ -342,20 +363,20 @@ rm(Regions)
 k=52000
 quantile(data$Annual_Premium ,probs = seq(0,1,by=0.05))
 
-data %>% #mutate(Response=as.integer(Response)-1) %>% 
+data %>% mutate(Response=as.integer(as.character(Response))) %>% 
          select(Annual_Premium,Response) %>% 
          mutate(Indicator=(Annual_Premium>k)*1) %>% 
          group_by(Indicator) %>%
          summarise(mean=mean(Response))
 
 # Create an additional column of values in excess of k 
-# works more efficiently through use of indicator, than rowwise function
+# works more efficiently through use of an indicator, than rowwise function
 Premiums=data %>% 
-  select(Annual_Premium) %>% 
-  mutate(Indicator=(Annual_Premium>k)*1,
-         Premium_Surplus=Indicator*(Annual_Premium-k),
-         Annual_Premium=Annual_Premium-Premium_Surplus) %>% 
-  select(-Indicator)
+         select(Annual_Premium) %>% 
+         mutate(Indicator=(Annual_Premium>k)*1,
+                Premium_Surplus=Indicator*(Annual_Premium-k),
+                Annual_Premium=Annual_Premium-Premium_Surplus) %>% 
+         select(-Indicator)
 
 # Normalization (remember to run the function.R script first)
 Premiums$Premium_Surplus=Normalize(Premiums$Premium_Surplus)
@@ -369,85 +390,107 @@ rm(Premiums,k)
 data$Age=Normalize(data$Age)
 
 # ///////////////////////////////////////
-# feature engineering  ----
-# ///////////////////////////////////////
-
-
-# TBD
-
-# ///////////////////////////////////////
 # train/test split and formatting----
 # ///////////////////////////////////////
-# all binary variables are converted to factors
+# data type handling
 data=data %>% 
-  select(-id) %>%
-  mutate(Response=as.factor(Response), # it is more convenient to do that just before modeling
-                     Gender=as.factor((Gender=="Female")*1)) %>% # it is more convenient for plotting 
-  mutate(across(c(7:74), factor)) %>% 
-  as.tibble() 
+        select(-id) %>%
+        mutate(Response=as.factor(Response),
+               Gender=(Gender=="Female")*1) %>% 
+        relocate(Response, .before=Gender) %>% 
+        relocate(Annual_Premium,.before=Gender) %>% 
+        relocate(Premium_Surplus,.before=Gender) %>% 
+        relocate(Age,.before=Gender) %>% 
+        mutate(across(c(5:76), as.integer)) %>% 
+        as.tibble() 
+        
+# let's also sample the unchanged dataset for performance comparison
+# onehotencoding and data type handling
+data_initial=data_initial %>% 
+             select(-id) %>%
+             relocate(where(is.character)) %>% 
+             relocate(Response, .before=Gender) %>% 
+             relocate(Annual_Premium,.before=Gender) %>% 
+             relocate(Vintage,.before=Gender) %>% 
+             relocate(Age,.before=Gender) %>% 
+             mutate(across(c(5:11),factor)) 
 
+data_initial = dummyVars("~ .", data=data_initial) %>% 
+               predict(newdata = data_initial) %>% 
+               as.tibble() %>% 
+               mutate(across(c(5:224),as.integer))
+
+# split
+# note that for the initial data set we have to create a separate test set
+# for the other cases (different resampling approaches) the other test set will be used
 sample=c(sample_frac(as.data.frame(1:nrow(data)),size = 0.8))[[1]]
 train_data=data[sample,]
 test_data=data[-sample,]
 
-# let's also sample the unchanged dataset for performance comparison
-data_initial=data_initial %>% 
-             select(-id) %>%
-             relocate(where(is.character)) %>% 
-             mutate(across(c(1:3,5:7,9:11),factor))
-
-train_data_initial=data[sample,]
-test_data_initial=data[-sample,]
+train_data_initial=data_initial[sample,]
+test_data_initial=data_initial[-sample,]
 
 # ///////////////////////////////////////
 # Upsampling  ----
 # ///////////////////////////////////////
-# base case 
+# There will be five datasets to test the different algorithms:
+# 1. Initial data - the raw dataset, only incl. one-hot encoding of factor vars.
+# 2. Base case - initial data after cleaning and feature engineering
+# 3. Resampled - Base case including additional instances of the underpopulated observations 
+# 4. ROSE - base case including additional instances generated through ROSE 
+# 5. SMOTE - base case including additional instances generated through SMOTE 
 
 # base case after cleaning and feature engineering
 train_data %>% 
-  group_by(Response) %>% 
-  summarise(n=n()) %>%
-  mutate(freq = n / sum(n))
+          group_by(Response) %>% 
+          summarise(n=n()) %>%
+          mutate(freq = n / sum(n))
 
 # there is no point to do proper resampling because of the low number of 
 # Response==1 cases and so, it might introduce too much noise 
 train_data_resampled=rbind(train_data,
-                           train_data %>% filter(Response==1))
+                           train_data %>% 
+                             filter(Response==1))
 
+# 71%-29%
 train_data_resampled %>% 
-  group_by(Response) %>% 
-  summarise(n=n()) %>%
-  mutate(freq = n / sum(n))
+          group_by(Response) %>% 
+          summarise(n=n()) %>%
+          mutate(freq = n / sum(n))
 
 # Random over sampling 
 # we have to correct for non-realistic outputs (negative premiums, or premiums lower than 2630) and 
 # outputs that break the previously outlined "rules" (eg. annual premium can't exceed 52000)
 # note - ROSE generates an entirely synthetic dataset
-# note - compared to the 'resampled' case above, this dataset is much larger 
+# note - compared to the 'resampled' case above, this dataset is almost twice as large
+# note - the binary variables have to be converted to factors, because otherwise the ROSE function, 
+# returns doubles and then we reconvert them to int
 train_data_ROSE=rbind(train_data,
                       ROSE(Response ~ ., 
-                           data=train_data, 
+                           data=train_data %>%   
+                                mutate(across(c(1,5:76), factor)),
                            seed=seed)$data %>% 
-                        rowwise() %>% 
-                      mutate(Annual_Premium=min(52000,
-                                                max(Annual_Premium,2630)),
-                             Premium_Surplus=max(Premium_Surplus,
-                                                 0)))
+                      mutate(Annual_Premium=Normalize(Annual_Premium),
+                             Premium_Surplus=Normalize(Premium_Surplus),
+                             Age=Normalize(Age),
+                             across(5:76,FactorToInteger)))
 
 # synthetic minority oversampling - todo
 # the SMOTE function takes forever to execute. Since the package is officially archived, 
 # I might redo this algorithm 
 # train_data_SMOTE=rbind(train_data,
 #                  SMOTE(form = Response ~ .,
-#                        data = train_data,
+#                        data = train_data[1:1000,],
 #                        perc.over = 100,
 #                        perc.under = 0,
 #                        k=5))
 
+# final format handling - the Response variable is saved as a factor 
+
+
 
 # ///////////////////////////////////////
-# Modeling - setting up ---- <- NOT RUN, STILL IN DEVELOPMENT
+# Modeling - setting up ---- 
 # ///////////////////////////////////////
 # parallel processing
 library(doParallel)
@@ -460,45 +503,135 @@ trControl = trainControl(
   number = 2,
   repeats = 2)
 
+# prep objects to store results
+Accuracy=matrix(nrow=5,ncol=5,NA) %>% as.data.frame()
+colnames(Accuracy)=c("Initial",
+                     "Basic",
+                     "Resampled",
+                     "ROSE",
+                     "SMOTE")  
 
-train(x=train_data,
-      method = "mlpSGD",
-      size= ,        #(Hidden Units)
-      l2reg= ,       #(L2 Regularization)
-      lambda= ,      #(RMSE Gradient Scaling)
-      learn_rate= ,  #(Learning Rate)
-      momentum= ,    #(Momentum)
-      gamma= ,       #(Learning Rate Decay)
-      minibatchsz= , #(Batch Size)
-      repeats =      #(Models)
-      )
-      
+rownames(Accuracy)=c("LogisticRegression",
+                     "NeuralNetwork",
+                     "DecisionTree",
+                     "RandomForest",
+                     "GBM")
+
+Specificity=Accuracy
 
 # ///////////////////////////////////////
-# Modeling - LOGISTIC REGRESSION ----
+# Modeling ------
 # ///////////////////////////////////////
+# 1. 
+# Logistic regression - Initial data
+Logistic_reg_Initial=train(x=train_data_initial %>% 
+                             select(-Response),
+                           y=train_data_initial$Response,
+                           method = 'glmnet',
+                           trControl = trControl,
+                           family = 'binomial' )
 
-# trControl=trainControl(method = "CV",number = 10)
+treshold=0.5
+Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
+                                             test_data_initial %>% select(-Response),
+                                             type = "prob")[,2] > treshold)*1)
 
-# on regular data 
-# Logistic_reg=glm(train_data[,-1],formula = Response ~.,family = "binomial")
+CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
+                   reference = as.factor(test_data_initial$Response))
 
-Logistic_reg=train(x= train_data %>% select(-id,-Response) , y=as.factor(train_data$Response),
-                                                                   method = 'glmnet',
-                                                                   # trControl = trControl,
-                                                                   family = 'binomial' )
+Accuracy[1,1]=CM$byClass[11]
+Specificity[1,1]=CM$byClass[2]
 
-treshold=0.4
-Predict_Logistic_reg=predict(Logistic_reg,
-                             test_data %>% select(-id,-Response),
-                             type = "prob")
+# 2.
+# Logistic regression - Basic data
+Logistic_reg=train(x= train_data %>% 
+                     select(-Response),
+                   y=train_data$Response,
+                   method = 'glmnet',
+                   trControl = trControl,
+                   family = 'binomial' )
 
+treshold=0.5
 Predict_Logistic_reg_fact=as.factor((predict(Logistic_reg,
-                                             test_data %>% select(-id,-Response),
-                                             type = "prob")[,1] > treshold)*1)
+                                             test_data %>% select(-Response),
+                                             type = "prob")[,2] > treshold)*1)
 
-confusionMatrix(data = Predict_Logistic_reg_fact,
-                reference = as.factor(test_data$Response))
+CM=confusionMatrix(data = Predict_Logistic_reg_fact,
+                reference = test_data$Response)
+
+Accuracy[1,2]=CM$byClass[11]
+Specificity[1,2]=CM$byClass[2]
+
+# 3.
+# Logistic regression - Resampled data
+Logistic_reg_resampled=train(x= train_data_resampled %>% 
+                     select(-Response),
+                   y=train_data_resampled$Response,
+                   method = 'glmnet',
+                   trControl = trControl,
+                   family = 'binomial' )
+
+treshold=0.5
+Predict_Logistic_reg_resampled_fact=as.factor((predict(Logistic_reg_resampled,
+                                             test_data %>% select(-Response),
+                                             type = "prob")[,2] > treshold)*1)
+
+CM=confusionMatrix(data = Predict_Logistic_reg_resampled_fact,
+                   reference = as.factor(test_data$Response))
+
+Accuracy[1,3]=CM$byClass[11]
+Specificity[1,3]=CM$byClass[2]
+
+# 4.
+# Logistic regression - ROSE data
+Logistic_reg_ROSE=train(x= train_data_ROSE %>% 
+                               select(-Response),
+                             y=train_data_ROSE$Response,
+                             method = 'glmnet',
+                             trControl = trControl,
+                             family = 'binomial' )
+
+treshold=0.5
+Predict_Logistic_reg_ROSE_fact=as.factor((predict(Logistic_reg_ROSE,
+                                                       test_data %>% select(-Response),
+                                                       type = "prob")[,2] > treshold)*1)
+
+CM=confusionMatrix(data = Predict_Logistic_reg_ROSE_fact,
+                   reference = as.factor(test_data$Response))
+
+Accuracy[1,4]=CM$byClass[11]
+Specificity[1,4]=CM$byClass[2]
+
+
+# 5.
+# Logistic regression - SMOTE data
+Logistic_reg_SMOTE=train(x= train_data_SMOTE %>% 
+                          select(-Response),
+                        y=train_data_SMOTE$Response,
+                        method = 'glmnet',
+                        trControl = trControl,
+                        family = 'binomial' )
+
+treshold=0.5
+Predict_Logistic_reg_SMOTE_fact=as.factor((predict(Logistic_reg_SMOTE,
+                                                  test_data %>% select(-Response),
+                                                  type = "prob")[,2] > treshold)*1)
+
+CM=confusionMatrix(data = Predict_Logistic_reg_SMOTE_fact,
+                   reference = as.factor(test_data$Response))
+
+Accuracy[1,4]=CM$byClass[11]
+Specificity[1,4]=CM$byClass[2]
+
+
+
+
+
+
+
+
+
+
 
 roc(predictor = predict(Logistic_reg,
              test_data %>% select(-id,-Response),
@@ -508,107 +641,23 @@ roc(predictor = predict(Logistic_reg,
 
 
 
-  
-# on RESAMPLED data  
-Logistic_reg_resampled=train(x= train_data %>% select(-id,-Response) , y=as.factor(train_data$Response),
-                   method = 'glmnet',
-                   # trControl = trControl,
-                   family = 'binomial' )
-
-treshold=0.4
-Predict_Logistic_reg_resampled=predict(Logistic_reg_resampled,
-                             test_data %>% select(-id,-Response),
-                             type = "prob")
-
-Predict_Logistic_reg_fact_resampled=as.factor((predict(Logistic_reg_resampled,
-                                             test_data %>% select(-id,-Response),
-                                             type = "prob")[,1] > treshold)*1)
-
-confusionMatrix(data = Predict_Logistic_reg_fact_resampled,
-                reference = as.factor(test_data$Response))
-
-roc(predictor = predict(Logistic_reg_resampled,
-                        test_data %>% select(-id,-Response),
-                        type = "prob")[,1],
-    response = as.factor(test_data$Response),plot = TRUE)
 
 
 
-# ///////////////////////////////////////
-# Modeling - Neural Network ----
-# ///////////////////////////////////////
-NeuralNet = train(Response ~ ., data = train_data %>% select(-id) %>% mutate(Response=as.factor(Response)), 
-                  trControl = trControl,
-                  method = "mlp",
-                  size=100)
-
-treshold_nn=0.5
-Predict_NeuralNet=predict(NeuralNet,
-                          test_data %>% select(-id,-Response),
-                          type = "prob")
-
-Predict_NeuralNet_reg_fact=as.factor((predict(NeuralNet,
-                                      test_data %>% select(-id,-Response),
-                                      type = "prob")[,2] > treshold_nn)*1)
-
-confusionMatrix(data = Predict_NeuralNet_reg_fact,
-                reference = as.factor(test_data$Response))
-
-roc(predictor = predict(NeuralNet,
-                        test_data %>% select(-id,-Response),
-                        type = "prob")[,2],
-    response = as.factor(test_data$Response),plot = TRUE)
- 
-# on resampled data
-NeuralNet_Resampled = train(Response ~ ., data = train_data_resampled %>% select(-id) %>% mutate(Response=as.factor(Response)), 
-                  trControl = trControl,
-                  method = "mlp",
-                  size=100)
-
-treshold_nn_Resampled=0.6
-Predict_NeuralNet_Resampled=predict(NeuralNet_Resampled,
-                          test_data %>% select(-id,-Response),
-                          type = "prob")
-
-Predict_NeuralNet_reg_fact_Resampled=as.factor((predict(NeuralNet_Resampled,
-                                              test_data %>% select(-id,-Response),
-                                              type = "prob")[,2] > treshold_nn_Resampled)*1)
-
-confusionMatrix(data = Predict_NeuralNet_reg_fact_Resampled,
-                reference = as.factor(test_data$Response))
-
-NeuralNet_Resampled_ROC=roc(predictor = predict(NeuralNet_Resampled,
-                        test_data %>% select(-id,-Response),
-                        type = "prob")[,2],
-    response = as.factor(test_data$Response),
-    plot = TRUE,
-    ret=TRUE)
-  
-
-# Random Forest
-RandomForest = train(Response ~ ., data = train_data %>% select(-id) %>% mutate(Response=as.factor(Response)), 
-                            trControl = trControl,
-                            method = "ranger")
-
-treshold_RF=0.5
-Predict_RandomForest=predict(RandomForest,
-                                    test_data %>% select(-id,-Response),
-                                    type = "prob")
+train(x=train_data[1:1000,] %>% select(-Response) ,
+      y=train_data[1:1000,]$Response ,
+      method = "mlpSGD",
+      size= 20,        #(Hidden Units)
+      l2reg= TRUE,       #(L2 Regularization)
+      # lambda= ,      #(RMSE Gradient Scaling)
+      learn_rate=1 ,  #(Learning Rate)
+      momentum=0.9,    #(Momentum)
+      # gamma= ,       #(Learning Rate Decay)
+      minibatchsz=1000 , #(Batch Size)
+      repeats = 2      #(Models)
+)
 
 
-RandomForest_reg_fact=as.factor((predict(RandomForest,
-                                                        test_data %>% select(-id,-Response),
-                                                        type = "raw")[,2] > treshold_RF)*1)
-
-confusionMatrix(data = RandomForest_reg_fact,
-                reference = as.factor(test_data$Response))
-
-Random_Forest_ROC=roc(predictor = predict(RandomForest_reg_fact,
-                                                test_data %>% select(-id,-Response),
-                                                type = "prob")[,2],
-                            response = as.factor(test_data$Response),
-                            plot = TRUE,
-                            ret=TRUE)
 
 
 
