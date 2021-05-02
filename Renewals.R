@@ -413,7 +413,7 @@ data_initial=data_initial %>%
              relocate(Annual_Premium,.before=Gender) %>% 
              relocate(Vintage,.before=Gender) %>% 
              relocate(Age,.before=Gender) %>% 
-             mutate(across(c(5:11),factor)) 
+             mutate(across(c(1,5:11),factor)) 
 
 data_initial = dummyVars("~ .", data=data_initial) %>% 
                predict(newdata = data_initial) %>% 
@@ -475,7 +475,7 @@ train_data_ROSE=rbind(train_data,
                              Age=Normalize(Age),
                              across(5:76,FactorToInteger)))
 
-# synthetic minority oversampling - todo
+# Todo: SMOTE
 # the SMOTE function takes forever to execute. Since the package is officially archived, 
 # I might redo this algorithm 
 # train_data_SMOTE=rbind(train_data,
@@ -484,10 +484,6 @@ train_data_ROSE=rbind(train_data,
 #                        perc.over = 100,
 #                        perc.under = 0,
 #                        k=5))
-
-# final format handling - the Response variable is saved as a factor 
-
-
 
 # ///////////////////////////////////////
 # Modeling - setting up ---- 
@@ -524,23 +520,23 @@ Specificity=Accuracy
 # ///////////////////////////////////////
 # 1. 
 # Logistic regression - Initial data
-Logistic_reg_Initial=train(x=train_data_initial %>% 
-                             select(-Response),
-                           y=train_data_initial$Response,
-                           method = 'glmnet',
-                           trControl = trControl,
-                           family = 'binomial' )
-
-treshold=0.5
-Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
-                                             test_data_initial %>% select(-Response),
-                                             type = "prob")[,2] > treshold)*1)
-
-CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
-                   reference = as.factor(test_data_initial$Response))
-
-Accuracy[1,1]=CM$byClass[11]
-Specificity[1,1]=CM$byClass[2]
+# Logistic_reg_Initial=train(x=train_data_initial %>%
+#                              select(-Response),
+#                            y=train_data_initial$Response,
+#                            method = 'glmnet',
+#                            trControl = trControl,
+#                            family = 'binomial' )
+# 
+# treshold=0.5
+# Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
+#                                              test_data_initial %>% select(-Response),
+#                                              type = "prob")[,2] > treshold)*1)
+# 
+# CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
+#                    reference = as.factor(test_data_initial$Response))
+# 
+# Accuracy[1,1]=CM$byClass[11]
+# Specificity[1,1]=CM$byClass[2]
 
 # 2.
 # Logistic regression - Basic data
@@ -605,26 +601,139 @@ Specificity[1,4]=CM$byClass[2]
 
 # 5.
 # Logistic regression - SMOTE data
-Logistic_reg_SMOTE=train(x= train_data_SMOTE %>% 
+# Logistic_reg_SMOTE=train(x= train_data_SMOTE %>% 
+#                           select(-Response),
+#                         y=train_data_SMOTE$Response,
+#                         method = 'glmnet',
+#                         trControl = trControl,
+#                         family = 'binomial' )
+# 
+# treshold=0.5
+# Predict_Logistic_reg_SMOTE_fact=as.factor((predict(Logistic_reg_SMOTE,
+#                                                   test_data %>% select(-Response),
+#                                                   type = "prob")[,2] > treshold)*1)
+# 
+# CM=confusionMatrix(data = Predict_Logistic_reg_SMOTE_fact,
+#                    reference = as.factor(test_data$Response))
+# 
+# Accuracy[1,4]=CM$byClass[11]
+# Specificity[1,4]=CM$byClass[2]
+
+# Neural Network
+# 1. 
+# Neural Network - Initial data
+# Logistic_reg_Initial=train(x=train_data_initial %>%
+#                              select(-Response),
+#                            y=train_data_initial$Response,
+#                            method = 'glmnet',
+#                            trControl = trControl,
+#                            family = 'binomial' )
+# 
+# treshold=0.5
+# Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
+#                                              test_data_initial %>% select(-Response),
+#                                              type = "prob")[,2] > treshold)*1)
+# 
+# CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
+#                    reference = as.factor(test_data_initial$Response))
+# 
+# Accuracy[1,1]=CM$byClass[11]
+# Specificity[1,1]=CM$byClass[2]
+
+
+train(x=train_data[1:1000,] %>% select(-Response) ,
+      y=train_data[1:1000,]$Response ,
+      method = "mlpSGD",
+      size= 20,        #(Hidden Units)
+      l2reg= TRUE,       #(L2 Regularization)
+      # lambda= ,      #(RMSE Gradient Scaling)
+      learn_rate=1 ,  #(Learning Rate)
+      momentum=0.9,    #(Momentum)
+      # gamma= ,       #(Learning Rate Decay)
+      minibatchsz=1000 , #(Batch Size)
+      repeats = 2      #(Models)
+)
+
+# 2.
+# Logistic regression - Basic data
+Logistic_reg=train(x= train_data %>% 
+                     select(-Response),
+                   y=train_data$Response,
+                   method = 'glmnet',
+                   trControl = trControl,
+                   family = 'binomial' )
+
+treshold=0.5
+Predict_Logistic_reg_fact=as.factor((predict(Logistic_reg,
+                                             test_data %>% select(-Response),
+                                             type = "prob")[,2] > treshold)*1)
+
+CM=confusionMatrix(data = Predict_Logistic_reg_fact,
+                   reference = test_data$Response)
+
+Accuracy[1,2]=CM$byClass[11]
+Specificity[1,2]=CM$byClass[2]
+
+# 3.
+# Logistic regression - Resampled data
+Logistic_reg_resampled=train(x= train_data_resampled %>% 
+                               select(-Response),
+                             y=train_data_resampled$Response,
+                             method = 'glmnet',
+                             trControl = trControl,
+                             family = 'binomial' )
+
+treshold=0.5
+Predict_Logistic_reg_resampled_fact=as.factor((predict(Logistic_reg_resampled,
+                                                       test_data %>% select(-Response),
+                                                       type = "prob")[,2] > treshold)*1)
+
+CM=confusionMatrix(data = Predict_Logistic_reg_resampled_fact,
+                   reference = as.factor(test_data$Response))
+
+Accuracy[1,3]=CM$byClass[11]
+Specificity[1,3]=CM$byClass[2]
+
+# 4.
+# Logistic regression - ROSE data
+Logistic_reg_ROSE=train(x= train_data_ROSE %>% 
                           select(-Response),
-                        y=train_data_SMOTE$Response,
+                        y=train_data_ROSE$Response,
                         method = 'glmnet',
                         trControl = trControl,
                         family = 'binomial' )
 
 treshold=0.5
-Predict_Logistic_reg_SMOTE_fact=as.factor((predict(Logistic_reg_SMOTE,
+Predict_Logistic_reg_ROSE_fact=as.factor((predict(Logistic_reg_ROSE,
                                                   test_data %>% select(-Response),
                                                   type = "prob")[,2] > treshold)*1)
 
-CM=confusionMatrix(data = Predict_Logistic_reg_SMOTE_fact,
+CM=confusionMatrix(data = Predict_Logistic_reg_ROSE_fact,
                    reference = as.factor(test_data$Response))
 
 Accuracy[1,4]=CM$byClass[11]
 Specificity[1,4]=CM$byClass[2]
 
 
-
+# 5.
+# Logistic regression - SMOTE data
+# Logistic_reg_SMOTE=train(x= train_data_SMOTE %>% 
+#                           select(-Response),
+#                         y=train_data_SMOTE$Response,
+#                         method = 'glmnet',
+#                         trControl = trControl,
+#                         family = 'binomial' )
+# 
+# treshold=0.5
+# Predict_Logistic_reg_SMOTE_fact=as.factor((predict(Logistic_reg_SMOTE,
+#                                                   test_data %>% select(-Response),
+#                                                   type = "prob")[,2] > treshold)*1)
+# 
+# CM=confusionMatrix(data = Predict_Logistic_reg_SMOTE_fact,
+#                    reference = as.factor(test_data$Response))
+# 
+# Accuracy[1,4]=CM$byClass[11]
+# Specificity[1,4]=CM$byClass[2]
 
 
 
@@ -644,18 +753,7 @@ roc(predictor = predict(Logistic_reg,
 
 
 
-train(x=train_data[1:1000,] %>% select(-Response) ,
-      y=train_data[1:1000,]$Response ,
-      method = "mlpSGD",
-      size= 20,        #(Hidden Units)
-      l2reg= TRUE,       #(L2 Regularization)
-      # lambda= ,      #(RMSE Gradient Scaling)
-      learn_rate=1 ,  #(Learning Rate)
-      momentum=0.9,    #(Momentum)
-      # gamma= ,       #(Learning Rate Decay)
-      minibatchsz=1000 , #(Batch Size)
-      repeats = 2      #(Models)
-)
+
 
 
 
