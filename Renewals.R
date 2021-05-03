@@ -641,18 +641,19 @@ Specificity[1,4]=CM$byClass[2]
 # Specificity[1,1]=CM$byClass[2]
 
 
-train(x=train_data[1:1000,] %>% select(-Response) ,
+nn_trial=train(x=train_data[1:1000,1:20] %>% select(-Response) ,
       y=train_data[1:1000,]$Response ,
       method = "mlpSGD",
       size= 20,        #(Hidden Units)
-      l2reg= TRUE,       #(L2 Regularization)
+      # l2reg= TRUE,       #(L2 Regularization)
       # lambda= ,      #(RMSE Gradient Scaling)
-      learn_rate=1 ,  #(Learning Rate)
-      momentum=0.9,    #(Momentum)
+      learn_rate=0.1 ,  #(Learning Rate)
+      # momentum=0.9,    #(Momentum)
       # gamma= ,       #(Learning Rate Decay)
-      minibatchsz=1000 , #(Batch Size)
+      # minibatchsz=100 , #(Batch Size)
       repeats = 2      #(Models)
 )
+
 
 # 2.
 # Logistic regression - Basic data
@@ -763,10 +764,46 @@ roc(predictor = predict(Logistic_reg,
 stopCluster(cl)
 
 # ///////////////////////////////////////
-# XAI ----
+# XAI ---- WORK IN PROGRESS
 # ///////////////////////////////////////
 
+# Prepare model explainer
+explainer = explain(Logistic_reg,
+                     data  = train_data,
+                     y     = as.integer(as.character(train_data$Response)),
+                     label = "Logistic Regression on basic dataset"
+                     # ,
+                     # predict_function = function(model, data){
+                     #   matrix(predict(model, data,
+                     #                  probability = TRUE)$predictions,
+                     #          ncol=2)[,2]}
+)
 
+# variable importance
+
+explainer %>% 
+  model_parts(loss_function = loss_default(explainer$model_info$type),
+              type = "variable_importance",
+              N = n_sample,
+              n_sample = 1000
+              ) %>% 
+  plot()  
+
+# shapley values
+explainer %>% 
+  predict_parts(new_observation = test_data %>% 
+                                  filter(Response==1) %>% 
+                                  sample_n(4),
+                type = "shap") %>% 
+  plot()
+
+
+
+
+
+explainer %>% 
+  model_performance() %>% 
+  plot(geom="roc")
 
 # ///////////////////////////////////////
 # notes ----
