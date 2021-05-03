@@ -8,3 +8,5 @@ Normalize=function(x){return((x-min(x))/(max(x)-min(x)))}
 
 # in to out
 '%ni%' <- Negate('%in%')
+
+FactorToInteger=function(x){return(as.integer(as.character(x)))}
