@@ -17,6 +17,7 @@ library(DALEX)
 library(FCNN4R) # neural network with SGD and hyperparams
 library(DMwR) # incl. SMOTE - Synthetic Minority Oversampling TEchnique - Nitesh Chawla, et al. 2002 
 library(ROSE) # incl ROSE - Training and assessing classification rules with unbalanced data Menardi G.,Torelli N. 2013
+library(doParallel)
 
 options(digits=2)
 seed=100
@@ -413,12 +414,14 @@ data_initial=data_initial %>%
              relocate(Annual_Premium,.before=Gender) %>% 
              relocate(Vintage,.before=Gender) %>% 
              relocate(Age,.before=Gender) %>% 
-             mutate(across(c(1,5:11),factor)) 
+             mutate(across(c(5:11),factor)) 
 
+# one hot encoding 
 data_initial = dummyVars("~ .", data=data_initial) %>% 
                predict(newdata = data_initial) %>% 
                as.tibble() %>% 
-               mutate(across(c(5:224),as.integer))
+               mutate(across(c(5:224),as.integer)) %>% 
+               mutate(Response=factor(Response))
 
 # split
 # note that for the initial data set we have to create a separate test set
@@ -486,13 +489,162 @@ train_data_ROSE=rbind(train_data,
 #                        k=5))
 
 # ///////////////////////////////////////
+# Dimension reduction  ---- 
+# ///////////////////////////////////////
+# rotation matrices from PCA
+PCA_Rot_train_data_initial = prcomp(train_data_initial[,-1])
+PCA_Rot_train_data = prcomp(train_data[,-1])
+PCA_Rot_train_data_resampled = prcomp(train_data_resampled[,-1])
+PCA_Rot_train_data_ROSE = prcomp(train_data_ROSE[,-1])
+
+
+# Training sets
+# k - how many principal components to keep
+k=50
+
+PCA_train_data_initial = train_data_initial[,-1] %>%
+                         data.matrix() %*%
+                         PCA_Rot_train_data_initial$rotation %>%
+                         as_tibble() %>%
+                         select(1:k) %>%
+                         add_column(train_data_initial[,1],.before="PC1")
+
+PCA_train_data = train_data[,-1] %>% 
+                 data.matrix() %*% 
+                 PCA_Rot_train_data$rotation %>% 
+                 as_tibble() %>% 
+                 select(1:k) %>% 
+                 add_column(train_data[,1],.before="PC1")
+  
+PCA_train_data_resampled = train_data_resampled[,-1] %>% 
+                           data.matrix() %*% 
+                           PCA_Rot_train_data_resampled$rotation %>% 
+                           as_tibble() %>% 
+                           select(1:k) %>% 
+                           add_column(train_data_resampled[,1],.before="PC1")
+
+PCA_train_data_ROSE = train_data_ROSE[,-1] %>% 
+                      data.matrix() %*% 
+                      PCA_Rot_train_data_ROSE$rotation %>% 
+                      as_tibble() %>% 
+                      select(1:k) %>% 
+                      add_column(train_data_ROSE[,1],.before="PC1")
+
+# The first two principal components seem to have 'found' the way
+# to characterize the Response.
+# A similar profile is seen in each dataset case, except for the initial data.
+# It seems that the feature engineering indeed helped to make differences
+# between the two groups more distinguishable.
+# Comparing the ROSE and resampled data that, ROSE does not introduce noise. 
+PCA_train_data_initial %>%
+  ggplot(aes(x=PC1,y=PC2,color=Response))+
+  geom_point(alpha=0.5)+
+  ggtitle("Principal Components by Response",
+          subtitle="Initial Train Data")
+
+PCA_train_data %>% 
+  ggplot(aes(x=PC1,y=PC2,color=Response))+
+  geom_point(alpha=0.5)+
+  ggtitle("Principal Components by Response",
+          subtitle="Train Data")
+
+PCA_train_data_resampled %>% 
+  ggplot(aes(x=PC1,y=PC2,color=Response))+
+  geom_point(alpha=0.5)+
+  ggtitle("Principal Components by Response",
+          subtitle="Resampled Train Data")
+
+PCA_train_data_ROSE %>% 
+  ggplot(aes(x=PC1,y=PC2,color=Response))+
+  geom_point(alpha=0.5)+
+  ggtitle("Principal Components by Response",
+          subtitle="ROSE Train Data")
+
+# Test sets 
+# I apply the train set rotation matrices to create new train sets.
+# The basic assumption of any train-test setting, is that 
+# the hold-out dataset has the same distribution as the train set. 
+# However, it should be checked anyway if the formulation of principal components
+# of the test set does not differ significantly. 
+# Similarly, these distributions should not change upon resampling/ROSE but
+# to rule out the chance for errors due to that, I create separate test sets
+PCA_test_data_initial = test_data_initial[,-1] %>%
+                        data.matrix() %*%
+                        PCA_Rot_train_data_initial$rotation %>%
+                        as_tibble() %>%
+                        select(1:k) %>%
+                        add_column(test_data_initial[,1],.before="PC1")
+
+PCA_test_data = test_data[,-1] %>% 
+                data.matrix() %*% 
+                PCA_Rot_train_data$rotation %>% 
+                as_tibble() %>% 
+                select(1:k) %>% 
+                add_column(test_data[,1],.before="PC1")
+
+PCA_test_data_resampled = test_data[,-1] %>% 
+                          data.matrix() %*% 
+                          PCA_Rot_train_data_resampled$rotation %>% 
+                          as_tibble() %>% 
+                          select(1:k) %>% 
+                          add_column(test_data[,1],.before="PC1")
+
+PCA_test_data_ROSE = test_data[,-1] %>% 
+                     data.matrix() %*% 
+                     PCA_Rot_train_data_ROSE$rotation %>% 
+                     as_tibble() %>% 
+                     select(1:k) %>% 
+                     add_column(test_data[,1],.before="PC1")
+
+# clean env - store train and test objects in lists and delete global variables
+TRAIN=list(train_data_initial=train_data_initial,
+           train_data=train_data,
+           train_data_resampled=train_data_resampled,
+           train_data_ROSE=train_data_ROSE,
+           
+           PCA_train_data_initial=PCA_train_data_initial,
+           PCA_train_data=PCA_train_data,
+           PCA_train_data_resampled=PCA_train_data_resampled,
+           PCA_train_data_ROSE=PCA_train_data_ROSE)
+
+TEST=list(test_data_initial=test_data_initial,
+          test_data=2,
+          
+          PCA_test_data_initial=PCA_test_data_initial,
+          PCA_test_data=PCA_test_data,
+          PCA_test_data_resampled=PCA_test_data_resampled,
+          PCA_test_data_ROSE=PCA_test_data_ROSE)
+
+rm(k,
+   
+   train_data_initial,
+   train_data,
+   train_data_resampled,
+   train_data_ROSE,
+   
+   test_data_initial,
+   test_data,
+
+   PCA_Rot_train_data_initial,
+   PCA_Rot_train_data,
+   PCA_Rot_train_data_resampled,
+   PCA_Rot_train_data_ROSE,
+   
+   PCA_train_data_initial,
+   PCA_train_data,
+   PCA_train_data_resampled,
+   PCA_train_data_ROSE,   
+   
+   PCA_test_data_initial,
+   PCA_test_data,
+   PCA_test_data_resampled,
+   PCA_test_data_ROSE)
+
+# ///////////////////////////////////////
 # Modeling - setting up ---- 
 # ///////////////////////////////////////
 # parallel processing
-library(doParallel)
-cl <- makePSOCKcluster(4)
-registerDoParallel(cl)
-
+registerDoParallel(makePSOCKcluster(4))
 
 trControl = trainControl(
   method = "repeatedcv",
@@ -518,82 +670,89 @@ Specificity=Accuracy
 # ///////////////////////////////////////
 # Modeling ------
 # ///////////////////////////////////////
-# 1. 
+# 1.
 # Logistic regression - Initial data
-# Logistic_reg_Initial=train(x=train_data_initial %>%
-#                              select(-Response),
-#                            y=train_data_initial$Response,
-#                            method = 'glmnet',
-#                            trControl = trControl,
-#                            family = 'binomial' )
-# 
-# treshold=0.5
-# Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
-#                                              test_data_initial %>% select(-Response),
-#                                              type = "prob")[,2] > treshold)*1)
-# 
-# CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
-#                    reference = as.factor(test_data_initial$Response))
-# 
-# Accuracy[1,1]=CM$byClass[11]
-# Specificity[1,1]=CM$byClass[2]
+Logistic_reg_Initial=train(x=TRAIN$PCA_train_data_initial %>%
+                             select(-Response),
+                           y=TRAIN$PCA_train_data_initial$Response,
+                           method = 'glmnet',
+                           trControl = trControl,
+                           family = 'binomial' )
+
+treshold=0.5
+Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
+                                             TEST$PCA_test_data_initial %>% select(-Response),
+                                             type = "prob")[,2] > treshold)*1)
+
+CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
+                   reference = as.factor(TEST$PCA_test_data_initial$Response))
+
+Accuracy[1,1]=CM$byClass[11]
+Specificity[1,1]=CM$byClass[2]
 
 # 2.
 # Logistic regression - Basic data
-Logistic_reg=train(x= train_data %>% 
+Logistic_reg=train(x= TRAIN$PCA_train_data %>% 
                      select(-Response),
-                   y=train_data$Response,
+                   y=TRAIN$PCA_train_data$Response,
                    method = 'glmnet',
                    trControl = trControl,
                    family = 'binomial' )
 
 treshold=0.5
 Predict_Logistic_reg_fact=as.factor((predict(Logistic_reg,
-                                             test_data %>% select(-Response),
+                                             TEST$PCA_test_data %>% select(-Response),
                                              type = "prob")[,2] > treshold)*1)
 
 CM=confusionMatrix(data = Predict_Logistic_reg_fact,
-                reference = test_data$Response)
+                reference = TEST$PCA_test_data$Response)
 
 Accuracy[1,2]=CM$byClass[11]
 Specificity[1,2]=CM$byClass[2]
 
 # 3.
 # Logistic regression - Resampled data
-Logistic_reg_resampled=train(x= train_data_resampled %>% 
+# there was no significant difference between the basic dataset and 
+# the dataset with feature engineering but here 
+# with resampling, as expected, there is a visible increase in True Positive Rate
+# It has to be noted that along with better TPR, the FPR seen a shift from FNR
+
+Logistic_reg_resampled=train(x= TRAIN$PCA_train_data_resampled %>% 
                      select(-Response),
-                   y=train_data_resampled$Response,
+                   y=TRAIN$PCA_train_data_resampled$Response,
                    method = 'glmnet',
                    trControl = trControl,
                    family = 'binomial' )
 
 treshold=0.5
 Predict_Logistic_reg_resampled_fact=as.factor((predict(Logistic_reg_resampled,
-                                             test_data %>% select(-Response),
+                                             TEST$PCA_test_data_resampled %>% select(-Response),
                                              type = "prob")[,2] > treshold)*1)
 
 CM=confusionMatrix(data = Predict_Logistic_reg_resampled_fact,
-                   reference = as.factor(test_data$Response))
+                   reference = as.factor(TEST$PCA_test_data_resampled$Response))
 
 Accuracy[1,3]=CM$byClass[11]
 Specificity[1,3]=CM$byClass[2]
 
 # 4.
 # Logistic regression - ROSE data
-Logistic_reg_ROSE=train(x= train_data_ROSE %>% 
+# ROSE introduced more False Positives compared to Resampled data
+
+Logistic_reg_ROSE=train(x= TRAIN$PCA_train_data_ROSE %>% 
                                select(-Response),
-                             y=train_data_ROSE$Response,
+                             y=TRAIN$PCA_train_data_ROSE$Response,
                              method = 'glmnet',
                              trControl = trControl,
                              family = 'binomial' )
 
 treshold=0.5
 Predict_Logistic_reg_ROSE_fact=as.factor((predict(Logistic_reg_ROSE,
-                                                       test_data %>% select(-Response),
+                                                       TEST$PCA_test_data_ROSE %>% select(-Response),
                                                        type = "prob")[,2] > treshold)*1)
 
 CM=confusionMatrix(data = Predict_Logistic_reg_ROSE_fact,
-                   reference = as.factor(test_data$Response))
+                   reference = as.factor(TEST$PCA_test_data_ROSE$Response))
 
 Accuracy[1,4]=CM$byClass[11]
 Specificity[1,4]=CM$byClass[2]
@@ -618,33 +777,32 @@ Specificity[1,4]=CM$byClass[2]
 # 
 # Accuracy[1,4]=CM$byClass[11]
 # Specificity[1,4]=CM$byClass[2]
-
+# 
 # Neural Network
-# 1. 
+# 1.
 # Neural Network - Initial data
-# Logistic_reg_Initial=train(x=train_data_initial %>%
-#                              select(-Response),
-#                            y=train_data_initial$Response,
-#                            method = 'glmnet',
-#                            trControl = trControl,
-#                            family = 'binomial' )
-# 
-# treshold=0.5
-# Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
-#                                              test_data_initial %>% select(-Response),
-#                                              type = "prob")[,2] > treshold)*1)
-# 
-# CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
-#                    reference = as.factor(test_data_initial$Response))
-# 
-# Accuracy[1,1]=CM$byClass[11]
-# Specificity[1,1]=CM$byClass[2]
+NN_reg_Initial=train(x=TRAIN$PCA_train_data_initial %>%
+                             select(-Response),
+                           y=TRAIN$PCA_train_data_initial$Response,
+                           method = 'rf',
+                           trControl = trControl)
+
+treshold=0.5
+Predict_NN_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
+                                             TEST$PCA_test_data_initial %>% select(-Response),
+                                             type = "prob")[,2] > treshold)*1)
+
+CM=confusionMatrix(data = Predict_NN_reg_Initial_fact,
+                   reference = as.factor(TEST$PCA_test_data_initial$Response))
+
+Accuracy[1,1]=CM$byClass[11]
+Specificity[1,1]=CM$byClass[2]
 
 
-nn_trial=train(x=train_data[1:1000,1:20] %>% select(-Response) ,
-      y=train_data[1:1000,]$Response ,
+nn_trial=train(x=TRAIN$PCA_train_data[1:1000,] %>% select(-Response) ,
+      y=TRAIN$PCA_train_data[1:1000,]$Response ,
       method = "mlpSGD",
-      size= 20,        #(Hidden Units)
+      size= c(20,10,5),        #(Hidden Units)
       # l2reg= TRUE,       #(L2 Regularization)
       # lambda= ,      #(RMSE Gradient Scaling)
       learn_rate=0.1 ,  #(Learning Rate)
@@ -761,7 +919,7 @@ roc(predictor = predict(Logistic_reg,
 
 
 # turn of parallel computing
-stopCluster(cl)
+stopCluster(makePSOCKcluster(4))
 
 # ///////////////////////////////////////
 # XAI ---- WORK IN PROGRESS
@@ -772,11 +930,6 @@ explainer = explain(Logistic_reg,
                      data  = train_data,
                      y     = as.integer(as.character(train_data$Response)),
                      label = "Logistic Regression on basic dataset"
-                     # ,
-                     # predict_function = function(model, data){
-                     #   matrix(predict(model, data,
-                     #                  probability = TRUE)$predictions,
-                     #          ncol=2)[,2]}
 )
 
 # variable importance

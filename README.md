@@ -4,9 +4,9 @@ Data preparation, EDA and modeling on an imbalanced dataset from:
 https://www.kaggle.com/arashnic/imbalanced-data-practice?select=aug_train.csv 
 
 In this exercise:
-I improve my data wrangling skills with dplyr,
+I further improve my data wrangling skills with dplyr,
 Perform automatic feature engineering,
-Work with SMOTE and ROSE methods for upsampling,
+Work with SMOTE and ROSE methods for upsampling and PCA,
 Fit, evaluate and compare caret models,
 Create more advanced ggplot2 graphics for EDA, 
 Play around with tidyquant (excel-like functions, e.g. pivot tables),
