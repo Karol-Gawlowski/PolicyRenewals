@@ -18,6 +18,8 @@ library(FCNN4R) # neural network with SGD and hyperparams
 library(DMwR) # incl. SMOTE - Synthetic Minority Oversampling TEchnique - Nitesh Chawla, et al. 2002 
 library(ROSE) # incl ROSE - Training and assessing classification rules with unbalanced data Menardi G.,Torelli N. 2013
 library(doParallel)
+library(data.table)
+library(h2o) # despite h2o.init() output, h2o requires not the newest java (>16) but (8-15)
 
 options(digits=2)
 seed=100
@@ -597,23 +599,23 @@ PCA_test_data_ROSE = test_data[,-1] %>%
                      add_column(test_data[,1],.before="PC1")
 
 # clean env - store train and test objects in lists and delete global variables
-TRAIN=list(train_data_initial=train_data_initial,
-           train_data=train_data,
-           train_data_resampled=train_data_resampled,
-           train_data_ROSE=train_data_ROSE,
+TRAIN=list(data_initial=train_data_initial,
+           data=train_data,
+           data_resampled=train_data_resampled,
+           data_ROSE=train_data_ROSE,
            
-           PCA_train_data_initial=PCA_train_data_initial,
-           PCA_train_data=PCA_train_data,
-           PCA_train_data_resampled=PCA_train_data_resampled,
-           PCA_train_data_ROSE=PCA_train_data_ROSE)
+           PCA_data_initial=PCA_train_data_initial,
+           PCA_data=PCA_train_data,
+           PCA_data_resampled=PCA_train_data_resampled,
+           PCA_data_ROSE=PCA_train_data_ROSE)
 
-TEST=list(test_data_initial=test_data_initial,
-          test_data=2,
+TEST=list(data_initial=test_data_initial,
+          data=test_data,
           
-          PCA_test_data_initial=PCA_test_data_initial,
-          PCA_test_data=PCA_test_data,
-          PCA_test_data_resampled=PCA_test_data_resampled,
-          PCA_test_data_ROSE=PCA_test_data_ROSE)
+          PCA_data_initial=PCA_test_data_initial,
+          PCA_data=PCA_test_data,
+          PCA_data_resampled=PCA_test_data_resampled,
+          PCA_data_ROSE=PCA_test_data_ROSE)
 
 rm(k,
    
@@ -667,99 +669,107 @@ rownames(Accuracy)=c("LogisticRegression",
 
 Specificity=Accuracy
 
+ConfMat=list()
+
 # ///////////////////////////////////////
 # Modeling ------
 # ///////////////////////////////////////
+# First I fit a simple model on the available data sets 
+
 # 1.
-# Logistic regression - Initial data
-Logistic_reg_Initial=train(x=TRAIN$PCA_train_data_initial %>%
+# Logistic regression - Initial data ----
+Logistic_reg_Initial=train(x=TRAIN$PCA_data_initial %>%
                              select(-Response),
-                           y=TRAIN$PCA_train_data_initial$Response,
+                           y=TRAIN$PCA_data_initial$Response,
                            method = 'glmnet',
                            trControl = trControl,
                            family = 'binomial' )
 
 treshold=0.5
 Predict_Logistic_reg_Initial_fact=as.factor((predict(Logistic_reg_Initial,
-                                             TEST$PCA_test_data_initial %>% select(-Response),
+                                             TEST$PCA_data_initial %>% select(-Response),
                                              type = "prob")[,2] > treshold)*1)
 
 CM=confusionMatrix(data = Predict_Logistic_reg_Initial_fact,
-                   reference = as.factor(TEST$PCA_test_data_initial$Response))
+                   reference = as.factor(TEST$PCA_data_initial$Response))
 
+ConfMat[["Logistic_reg_Initial"]]=CM
 Accuracy[1,1]=CM$byClass[11]
 Specificity[1,1]=CM$byClass[2]
 
 # 2.
-# Logistic regression - Basic data
-Logistic_reg=train(x= TRAIN$PCA_train_data %>% 
+# Logistic regression - Basic data ----
+Logistic_reg=train(x= TRAIN$PCA_data %>% 
                      select(-Response),
-                   y=TRAIN$PCA_train_data$Response,
+                   y=TRAIN$PCA_data$Response,
                    method = 'glmnet',
                    trControl = trControl,
                    family = 'binomial' )
 
 treshold=0.5
 Predict_Logistic_reg_fact=as.factor((predict(Logistic_reg,
-                                             TEST$PCA_test_data %>% select(-Response),
+                                             TEST$PCA_data %>% select(-Response),
                                              type = "prob")[,2] > treshold)*1)
 
 CM=confusionMatrix(data = Predict_Logistic_reg_fact,
-                reference = TEST$PCA_test_data$Response)
+                reference = TEST$PCA_data$Response)
 
+ConfMat[["Logistic_reg"]]=CM
 Accuracy[1,2]=CM$byClass[11]
 Specificity[1,2]=CM$byClass[2]
 
 # 3.
-# Logistic regression - Resampled data
+# Logistic regression - Resampled data ----
 # there was no significant difference between the basic dataset and 
 # the dataset with feature engineering but here 
 # with resampling, as expected, there is a visible increase in True Positive Rate
 # It has to be noted that along with better TPR, the FPR seen a shift from FNR
 
-Logistic_reg_resampled=train(x= TRAIN$PCA_train_data_resampled %>% 
+Logistic_reg_resampled=train(x= TRAIN$PCA_data_resampled %>% 
                      select(-Response),
-                   y=TRAIN$PCA_train_data_resampled$Response,
+                   y=TRAIN$PCA_data_resampled$Response,
                    method = 'glmnet',
                    trControl = trControl,
                    family = 'binomial' )
 
 treshold=0.5
 Predict_Logistic_reg_resampled_fact=as.factor((predict(Logistic_reg_resampled,
-                                             TEST$PCA_test_data_resampled %>% select(-Response),
+                                             TEST$PCA_data_resampled %>% select(-Response),
                                              type = "prob")[,2] > treshold)*1)
 
 CM=confusionMatrix(data = Predict_Logistic_reg_resampled_fact,
-                   reference = as.factor(TEST$PCA_test_data_resampled$Response))
+                   reference = as.factor(TEST$PCA_data_resampled$Response))
 
+ConfMat[["Logistic_reg_resampled"]]=CM
 Accuracy[1,3]=CM$byClass[11]
 Specificity[1,3]=CM$byClass[2]
 
 # 4.
-# Logistic regression - ROSE data
+# Logistic regression - ROSE data ----
 # ROSE introduced more False Positives compared to Resampled data
 
-Logistic_reg_ROSE=train(x= TRAIN$PCA_train_data_ROSE %>% 
+Logistic_reg_ROSE=train(x= TRAIN$PCA_data_ROSE %>% 
                                select(-Response),
-                             y=TRAIN$PCA_train_data_ROSE$Response,
+                             y=TRAIN$PCA_data_ROSE$Response,
                              method = 'glmnet',
                              trControl = trControl,
                              family = 'binomial' )
 
 treshold=0.5
 Predict_Logistic_reg_ROSE_fact=as.factor((predict(Logistic_reg_ROSE,
-                                                       TEST$PCA_test_data_ROSE %>% select(-Response),
+                                                       TEST$PCA_data_ROSE %>% select(-Response),
                                                        type = "prob")[,2] > treshold)*1)
 
 CM=confusionMatrix(data = Predict_Logistic_reg_ROSE_fact,
-                   reference = as.factor(TEST$PCA_test_data_ROSE$Response))
+                   reference = as.factor(TEST$PCA_data_ROSE$Response))
 
+ConfMat[["Logistic_reg_ROSE"]]=CM
 Accuracy[1,4]=CM$byClass[11]
 Specificity[1,4]=CM$byClass[2]
 
 
 # 5.
-# Logistic regression - SMOTE data
+# Logistic regression - SMOTE data ----
 # Logistic_reg_SMOTE=train(x= train_data_SMOTE %>% 
 #                           select(-Response),
 #                         y=train_data_SMOTE$Response,
@@ -775,12 +785,95 @@ Specificity[1,4]=CM$byClass[2]
 # CM=confusionMatrix(data = Predict_Logistic_reg_SMOTE_fact,
 #                    reference = as.factor(test_data$Response))
 # 
+# ConfMat[["Logistic_reg_SMOTE"]]=CM
 # Accuracy[1,4]=CM$byClass[11]
 # Specificity[1,4]=CM$byClass[2]
 # 
+
+
+# WORK IN PROGRESS
+
 # Neural Network
 # 1.
-# Neural Network - Initial data
+# Neural Network - Initial data ----
+h2o.init()
+h2o.init(nthreads=-1, max_mem_size="2G")
+h2o.removeAll() ## clean slate - just in case the cluster was already running
+
+
+temporary=as.h2o(TRAIN$PCA_data_resampled)
+temporary_test=as.h2o(x = TEST$PCA_data_resampled)
+
+
+param_tune=hyper_params = list(
+                          hidden=list(c(50,50,10),c(100,50,10)),
+                          rate=c(0.01,0.02,0.05,0.1),
+                          rate_annealing=c(1e-8,1e-7,1e-6)
+)
+
+NN_Initial_Data = h2o.deeplearning(
+                  model_id="NN_Initial_Data", 
+                  grid_id="NN_grid_Initial_Data", 
+                  
+                  # Data input
+                  training_frame=temporary, 
+                  validation_frame=temporary_test,   ## validation dataset: used for scoring and early stopping
+                  x=setdiff(names(TRAIN$PCA_data), "Response"),
+                  y="Response",
+                  
+                  # Basic hyperparams.
+                  activation="Tanh",   ## for ReLU I encountered the exploding gradient problem 
+                  # hidden=c(50,50,10),       ## default: 2 hidden layers with 200 neurons each
+                  epochs=30,
+                  # mini_batch_size = 100000,
+                  
+                  # Manual learning parameters 
+                  adaptive_rate=F,
+                  # rate=0.05,
+                  # rate_annealing=2e-6,            
+                  # momentum_start=0.5,             ## manually tuned momentum
+                  # momentum_stable=0.3,
+                  
+                  # Early Stopping
+                  stopping_metric="MSE", ## could be "MSE","logloss","r2"
+                  stopping_tolerance=0.001,
+                  
+                  # Output
+                  variable_importances=T,    ## not enabled by default
+                  initial_weight_distribution = "Normal",
+                  # verbose = TRUE,
+                  reproducible=TRUE,
+                  seed = seed
+                  
+)
+# summary(NN_Initial_Data)
+
+# to keep results from all models comparable, I translate the h2o object
+# back to a regular vector but even though as.data.frame() conversion
+# outputs a factor, I needed to do some equilibristics to get confusionMatrix
+# function to accept the inputs
+Prediction=h2o.predict(NN_Initial_Data,
+                       newdata=temporary_test)[,1] %>% 
+                       as.data.frame()  %>%
+                       as.matrix() %>% 
+                       factor()
+
+Reference=temporary_test[,1] %>% 
+          as.data.frame() %>% 
+          as.matrix() %>% 
+          factor()
+
+CM=confusionMatrix(data = Prediction,reference = Reference)
+
+ConfMat[["NN_Initial_Data"]]=CM
+ConfMat$NN_Initial_Data$table/sum(ConfMat$NN_Initial_Data$table)
+
+
+
+
+
+
+
 NN_reg_Initial=train(x=TRAIN$PCA_train_data_initial %>%
                              select(-Response),
                            y=TRAIN$PCA_train_data_initial$Response,
