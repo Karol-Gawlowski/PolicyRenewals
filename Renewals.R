@@ -667,6 +667,11 @@ rownames(Accuracy)=c("LogisticRegression",
                      "RandomForest",
                      "GBM")
 
+loopnames=c("PCA_data_initial",
+            "PCA_data",
+            "PCA_data_resampled",
+            "PCA_data_ROSE")
+
 Specificity=Accuracy
 
 ConfMat=list()
@@ -676,126 +681,65 @@ Predictions=list()
 # ///////////////////////////////////////
 # Modeling ------
 # ///////////////////////////////////////
+# indicate how many observations to take from the training set
+# to initally evaluate the models. Can be set to nrow(data) but
+# then the training will take much longer.
+# for now it takes the first n=SubSet observations, later do: random sampling
+SubSet=10000
+  
+  rm(Predict_Logistic_reg_fact,
+     Predict_Logistic_reg_Initial_fact,
+     Predict_Logistic_reg_resampled_fact,
+     Predict_Logistic_reg_ROSE_fact)
+
 # First I fit a simple model on the available data sets 
-
-# 1.
-# Logistic regression - Initial data ----
-Models[["Logistic_reg_Initial"]]=train(x=TRAIN$PCA_data_initial %>%
-                                       select(-Response),
-                                       y=TRAIN$PCA_data_initial$Response,
-                                       method = 'glmnet',
-                                       trControl = trControl,
-                                       family = 'binomial' )
-
+# (Disregard the warnings relating to row names in tibbles)
+Best_LR=list()
 treshold=0.5
-Predictions[["Logistic_reg_Initial"]]=as.factor((predict(Models$Logistic_reg_Initial,
-                                                             TEST$PCA_data_initial %>% 
-                                                             select(-Response),
-                                                             type = "prob")[,2] > treshold)*1)
 
-CM=confusionMatrix(data = Predictions$Logistic_reg_Initial,
-                   reference = as.factor(TEST$PCA_data_initial$Response))
-
-ConfMat[["Logistic_reg_Initial"]]=CM
-Accuracy[1,1]=CM$byClass[11]
-Specificity[1,1]=CM$byClass[2]
-
-# 2.
-# Logistic regression - Basic data ----
-Models[["Logistic_reg"]]=train(x= TRAIN$PCA_data %>% 
-                         select(-Response),
-                         y=TRAIN$PCA_data$Response,
-                         method = 'glmnet',
-                         trControl = trControl,
-                         family = 'binomial' )
-
-treshold=0.5
-Predictions[["Logistic_reg"]]=as.factor((predict(Models$Logistic_reg,
-                                             TEST$PCA_data %>% 
-                                             select(-Response),
-                                             type = "prob")[,2] > treshold)*1)
-
-CM=confusionMatrix(data = Predictions$Logistic_reg,
-                reference = TEST$PCA_data$Response)
-
-ConfMat[["Logistic_reg"]]=CM
-Accuracy[1,2]=CM$byClass[11]
-Specificity[1,2]=CM$byClass[2]
-
-# 3.
-# Logistic regression - Resampled data ----
-# there was no significant difference between the basic dataset and 
-# the dataset with feature engineering but here 
-# with resampling, as expected, there is a visible increase in True Positive Rate
-# It has to be noted that along with better TPR, the FPR seen a shift from FNR
-
-Models[["Logistic_reg_resampled"]]=train(x= TRAIN$PCA_data_resampled %>% 
-                                         select(-Response),
-                                         y=TRAIN$PCA_data_resampled$Response,
-                                         method = 'glmnet',
-                                         trControl = trControl,
-                                         family = 'binomial' )
-
-treshold=0.5
-Predictions[["Logistic_reg_resampled"]]=as.factor((predict(Models$Logistic_reg_resampled,
-                                                                TEST$PCA_data_resampled %>% 
-                                                                select(-Response),
-                                                                type = "prob")[,2] > treshold)*1)
-
-CM=confusionMatrix(data = Predictions$Logistic_reg_resampled,
-                   reference = as.factor(TEST$PCA_data_resampled$Response))
-
-ConfMat[["Logistic_reg_resampled"]]=CM
-Accuracy[1,3]=CM$byClass[11]
-Specificity[1,3]=CM$byClass[2]
-
-# 4.
-# Logistic regression - ROSE data ----
-# ROSE introduced more False Positives compared to Resampled data
-
-Models[["Logistic_reg_ROSE"]]=train(x= TRAIN$PCA_data_ROSE %>% 
-                              select(-Response),
-                              y=TRAIN$PCA_data_ROSE$Response,
+for (i in 1:4){
+  print(paste("Training model: Logistic Regression, data: ", loopnames[i], sep=""))
+  
+  training_frame = TRAIN[[loopnames[i]]] %>% slice(1:10000)
+  validation_frame=TEST[[loopnames[i]]] %>% slice(1:10000)
+  
+  # fit logistic regression
+  temp=train(x=training_frame %>% select(-1) ,
+                              y=training_frame$Response,
                               method = 'glmnet',
                               trControl = trControl,
                               family = 'binomial' )
+  
+  Best_LR[loopnames[i]]=list(temp)
+  # confusion matrix for test data
+  Prediction=as.factor((predict(temp,
+                                validation_frame %>% select(-1),
+                                type = "prob")[,2] > treshold)*1)
+  
+  Reference=validation_frame$Response %>% factor()
+  
+  CM=confusionMatrix(data=Prediction,reference=Reference)
+  ConfMat[[paste("LR_Test",loopnames[i],sep="_")]]=CM
 
-treshold=0.5
-Predictions[["Predict_Logistic_reg_ROSE"]]=as.factor((predict(Models$Logistic_reg_ROSE,
-                                                       TEST$PCA_data_ROSE %>% select(-Response),
-                                                       type = "prob")[,2] > treshold)*1)
-
-CM=confusionMatrix(data = Predictions$Predict_Logistic_reg_ROSE,
-                   reference = as.factor(TEST$PCA_data_ROSE$Response))
-
-ConfMat[["Logistic_reg_ROSE"]]=CM
-Accuracy[1,4]=CM$byClass[11]
-Specificity[1,4]=CM$byClass[2]
-
-
-# 5.
-# Logistic regression - SMOTE data ----
-# Models[["Logistic_reg_SMOTE"]]=train(x= train_data_SMOTE %>%
-#                                       select(-Response),
-#                                       y=train_data_SMOTE$Response,
-#                                       method = 'glmnet',
-#                                       trControl = trControl,
-#                                       family = 'binomial' )
-# 
-# treshold=0.5
-# Predictions[["Predict_Logistic_reg_SMOTE"]]=as.factor((predict(Models$Logistic_reg_SMOTE,
-#                                                   test_data %>% select(-Response),
-#                                                   type = "prob")[,2] > treshold)*1)
-# 
-# CM=confusionMatrix(data = Predictions$Predict_Logistic_reg_SMOTE,
-#                    reference = as.factor(test_data$Response))
-# 
-# ConfMat[["Logistic_reg_SMOTE"]]=CM
-# Accuracy[1,4]=CM$byClass[11]
-# Specificity[1,4]=CM$byClass[2]
-# 
-
-
+  # confusion matrix for train data
+  Prediction=as.factor((predict(temp,
+                                training_frame %>% select(-1),
+                                type = "prob")[,2] > treshold)*1)
+  
+  Reference=training_frame$Response %>% factor()
+  
+  CM=confusionMatrix(data=Prediction,reference=Reference)
+  ConfMat[[paste("LR_Train",loopnames[i],sep="_")]]=CM  
+  
+  # delete all not needed models and clear temporary grid
+  rm(Prediction,
+     Reference,
+     CM,
+     training_frame,
+     validation_frame,
+     temp)
+  
+}
 
 # h2o models ----
 h2o.init()
@@ -825,111 +769,117 @@ param_tune_NN= list(
 )
 
 for (i in 1:4){
-
-training_frame = as.h2o(TRAIN[loopnames[i]] %>%
-                          as.data.frame() %>%
-                          slice(1:100000),
-                        use_datatable = FALSE)
-
-validation_frame=as.h2o(TEST[loopnames[i]] %>%
-                          as.data.frame() %>%
-                          slice(1:10000),
-                        use_datatable = FALSE)
-
-# variable referencing in the h2o.grid object
-ColNames=colnames(training_frame)
-
-Best_NN[loopnames[i]]=h2o.grid(
-                  algorithm="deeplearning",
-                  hyper_params=param_tune_NN,
-                  grid_id=paste(loopnames[i],"NN",sep="_"), 
-
-                  # Data inputs
-                  training_frame = training_frame,
-                  validation_frame=validation_frame,
-                  x=setdiff(ColNames, ColNames[1]),
-                  y=ColNames[1],
-                  
-                  # Basic hyperparams.
-                  hidden=c(40,30,10),
-                  activation="Tanh",   ## for ReLU I encountered the exploding gradient problem 
-                  epochs=50,
-                  # mini_batch_size = 10000,
-                  
-                  adaptive_rate=F,
-                  rate_annealing=0.1^(7),  # picked after lots of trials 
-                  
-                  # Manual learning parameters 
-                  # score_validation_samples=1000,
-                  # rate=0.05,
-                  # rate_annealing=2e-6,            
-                  # momentum_start=0.5,
-                  # momentum_stable=0.9,          
-                  
-                  
-                  # Output
-                  variable_importances=T,    ## not enabled by default
-                  initial_weight_distribution = "Normal",
-                  seed = seed
-                  # verbose = TRUE,
-                  # reproducible=TRUE,
-
-                  # Early Stopping
-                  # stopping_metric="MSE", ## could be "MSE","logloss","r2"
-                  # stopping_tolerance=0.001,
-)
-
-# to keep results from all models comparable, I translate the h2o object
-# back to a regular vector but even though as.data.frame() conversion
-# outputs a factor, I needed to do some equilibristics to get confusionMatrix
-# function to accept the inputs 
-
-# first I retrieve the list of models resulting form grid search
-grid=h2o.getGrid(grid_id = paste(loopnames[i],"NN",sep="_"),
-                 sort_by="roc",decreasing=FALSE)
-
-# print(grid)
-
-BestModel=h2o.getModel(grid@model_ids[[1]])
-
-# overwrite the model object with the best models' parameters
-Best_NN[loopnames[i]]=list(BestModel@model[["model_summary"]])
-
-# make the prediction on the best model (Testing set)
-Prediction=h2o.predict(BestModel,
-                       newdata=validation_frame)[,1]%>%
-                               as.data.frame()  %>%
-                               as.matrix() %>%
-                               factor()
-
-Reference=validation_frame[,1] %>% 
-          as.data.frame() %>% 
-          as.matrix() %>% 
-          factor()
-
-# feed the Prediction and true values to the caret confusionMatrix and save
-CM=confusionMatrix(data = Prediction,reference = Reference)
-ConfMat[[paste("NN_Test",loopnames[i],sep="_")]]=CM
-
-# make the prediction on the best model (Training set)
-Prediction=h2o.predict(BestModel,
-                       newdata=training_frame)[,1]%>%
-                       as.data.frame()  %>%
-                       as.matrix() %>%
-                       factor()
-
-Reference=training_frame[,1] %>% 
-          as.data.frame() %>% 
-          as.matrix() %>% 
-          factor()
-
-# feed the Prediction and true values to the caret confusionMatrix and save
-CM=confusionMatrix(data = Prediction,reference = Reference)
-ConfMat[[paste("NN_Training",loopnames[i],sep="_")]]=CM
-
-# delete all not needed models and clear temporary grid
-h2o.removeAll()
-rm(grid,Prediction,Reference)
+  print(paste("Grid Search of params: NN, data: ", loopnames[i], sep=""))
+  
+  training_frame = as.h2o(TRAIN[loopnames[i]] %>%
+                            as.data.frame() %>%
+                            slice(1:100000),
+                          use_datatable = FALSE)
+  
+  validation_frame=as.h2o(TEST[loopnames[i]] %>%
+                            as.data.frame() %>%
+                            slice(1:10000),
+                          use_datatable = FALSE)
+  
+  # variable referencing in the h2o.grid object
+  ColNames=colnames(training_frame)
+  
+  Best_NN[loopnames[i]]=h2o.grid(
+                    algorithm="deeplearning",
+                    hyper_params=param_tune_NN,
+                    grid_id=paste(loopnames[i],"NN",sep="_"), 
+  
+                    # Data inputs
+                    training_frame = training_frame,
+                    validation_frame=validation_frame,
+                    x=setdiff(ColNames, ColNames[1]),
+                    y=ColNames[1],
+                    
+                    # Basic hyperparams.
+                    hidden=c(40,30,10),
+                    activation="Tanh",   ## for ReLU I encountered the exploding gradient problem 
+                    epochs=50,
+                    # mini_batch_size = 10000,
+                    
+                    adaptive_rate=F,
+                    rate_annealing=0.1^(7),  # picked after lots of trials 
+                    
+                    # Manual learning parameters 
+                    # score_validation_samples=1000,
+                    # rate=0.05,
+                    # rate_annealing=2e-6,            
+                    # momentum_start=0.5,
+                    # momentum_stable=0.9,          
+                    
+                    
+                    # Output
+                    variable_importances=T,    ## not enabled by default
+                    initial_weight_distribution = "Normal",
+                    seed = seed
+                    # verbose = TRUE,
+                    # reproducible=TRUE,
+  
+                    # Early Stopping
+                    # stopping_metric="MSE", ## could be "MSE","logloss","r2"
+                    # stopping_tolerance=0.001,
+  )
+  
+  # to keep results from all models comparable, I translate the h2o object
+  # back to a regular vector but even though as.data.frame() conversion
+  # outputs a factor, I needed to do some equilibristics to get confusionMatrix
+  # function to accept the inputs 
+  
+  # first I retrieve the list of models resulting form grid search
+  grid=h2o.getGrid(grid_id = paste(loopnames[i],"NN",sep="_"),
+                   sort_by="roc",decreasing=FALSE)
+  
+  # print(grid)
+  
+  BestModel=h2o.getModel(grid@model_ids[[1]])
+  
+  # overwrite the grid object with the best models' parameters
+  Best_NN[loopnames[i]]=list(BestModel@model[["model_summary"]])
+  
+  # make the prediction on the best model (Testing set)
+  Prediction=h2o.predict(BestModel,
+                         newdata=validation_frame)[,1]%>%
+                                 as.data.frame()  %>%
+                                 as.matrix() %>%
+                                 factor()
+  
+  Reference=validation_frame[,1] %>% 
+            as.data.frame() %>% 
+            as.matrix() %>% 
+            factor()
+  
+  # feed the Prediction and true values to the caret confusionMatrix and save
+  CM=confusionMatrix(data = Prediction,reference = Reference)
+  ConfMat[[paste("NN_Test",loopnames[i],sep="_")]]=CM
+  
+  # make the prediction on the best model (Training set)
+  Prediction=h2o.predict(BestModel,
+                         newdata=training_frame)[,1]%>%
+                         as.data.frame()  %>%
+                         as.matrix() %>%
+                         factor()
+  
+  Reference=training_frame[,1] %>% 
+            as.data.frame() %>% 
+            as.matrix() %>% 
+            factor()
+  
+  # feed the Prediction and true values to the caret confusionMatrix and save
+  CM=confusionMatrix(data = Prediction,reference = Reference)
+  ConfMat[[paste("NN_Training",loopnames[i],sep="_")]]=CM
+  
+  # delete all not needed models and clear temporary grid
+  h2o.removeAll()
+  rm(grid,
+     Prediction,
+     Reference,
+     training_frame,
+     validati_frame,
+     BestModel)
 }
 
 
@@ -945,36 +895,35 @@ param_tune_RF= list(max_depth = c(20,25,30),
                     min_rows = c(5,7,10),
                     ntrees = c(40,50))
 
-
 for (i in 1:4){
-print(paste("Grid Search of params: RF, data: ", loopnames[i], sep=""))
+  print(paste("Grid Search of params: RF, data: ", loopnames[i], sep=""))
+    
+  # subset of training frame in h2o format
+  training_frame = as.h2o(TRAIN[loopnames[i]] %>%
+                            as.data.frame() %>%
+                            slice(1:100000),
+                          use_datatable = FALSE)
   
-# subset of training frame in h2o format
-training_frame = as.h2o(TRAIN[loopnames[i]] %>%
-                          as.data.frame() %>%
-                          slice(1:100000),
-                        use_datatable = FALSE)
-
-# subset of testing frame in h2o format
-validation_frame=as.h2o(TEST[loopnames[i]] %>%
-                     as.data.frame() %>%
-                     slice(1:10000),
-                   use_datatable = FALSE)
-
-ColNames=colnames(validation_frame) 
-
-# grid search for best model
-Best_RF[loopnames[i]]=h2o.grid(
-                      algorithm="randomForest",
-                      hyper_params=param_tune_RF,
-                      grid_id=paste(loopnames[i],"RF",sep="_"),
-
-                      training_frame = training_frame,
-                      validation_frame= validation_frame,
-                      
-                      x=setdiff(ColNames, ColNames[1]),
-                      y=ColNames[1],
-                      seed = seed)
+  # subset of testing frame in h2o format
+  validation_frame=as.h2o(TEST[loopnames[i]] %>%
+                       as.data.frame() %>%
+                       slice(1:10000),
+                     use_datatable = FALSE)
+  
+  ColNames=colnames(validation_frame) 
+  
+  # grid search for best model
+  Best_RF[loopnames[i]]=h2o.grid(
+                        algorithm="randomForest",
+                        hyper_params=param_tune_RF,
+                        grid_id=paste(loopnames[i],"RF",sep="_"),
+  
+                        training_frame = training_frame,
+                        validation_frame= validation_frame,
+                        
+                        x=setdiff(ColNames, ColNames[1]),
+                        y=ColNames[1],
+                        seed = seed)
 
   # to keep results from all models comparable, I translate the h2o object
   # back to a regular vector but even though as.data.frame() conversion
@@ -989,7 +938,7 @@ Best_RF[loopnames[i]]=h2o.grid(
   
   BestModel=h2o.getModel(grid@model_ids[[1]])
   
-  # overwrite the model object with the best models' parameters
+  # overwrite the grid object with the best models' parameters
   Best_RF[loopnames[i]]=list(BestModel@model[["model_summary"]])
 
   # Confusion matrix for the test set
@@ -1030,7 +979,8 @@ Best_RF[loopnames[i]]=h2o.grid(
      Prediction,
      Reference,
      training_frame,
-     validati_frame)
+     validati_frame,
+     BestModel)
   
 }
 
