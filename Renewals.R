@@ -797,7 +797,7 @@ Specificity[1,4]=CM$byClass[2]
 
 
 
-# h2o models
+# h2o models ----
 h2o.init()
 h2o.init(nthreads=3, max_mem_size="2G")
 h2o.removeAll() ## clean slate - just in case the cluster was already running
@@ -806,12 +806,6 @@ loopnames=c("PCA_data_initial",
             "PCA_data",
             "PCA_data_resampled",
             "PCA_data_ROSE")
-
-# data needs to be passed as a h2o object and the wrapper function
-# does not work* when applied from within the h2o.grid or h2o.deeplearning function
-# *that's probably due to an error throwed by the function, relating data.frame 
-# package being outdated, but the error persists even after updating it...
-
 
 # Neural Networks ----
 # these models are trained in a loop with hyperparameters found through
@@ -823,21 +817,27 @@ loopnames=c("PCA_data_initial",
 # to store parameters of the best models
 Best_NN=list()
 
+param_tune_NN= list(
+  # hidden=list(c(50,50,10),c(40,30,10),c(40,30,5)),
+  rate=c(0.09,0.08,0.07,0.06),
+  momentum_stable=c(0.9,0.8,0.7),
+  momentum_start=c(0.9,0.8,0.7)
+)
+
 for (i in 1:4){
 
+training_frame = as.h2o(TRAIN[loopnames[i]] %>%
+                          as.data.frame() %>%
+                          slice(1:100000),
+                        use_datatable = FALSE)
+
+validation_frame=as.h2o(TEST[loopnames[i]] %>%
+                          as.data.frame() %>%
+                          slice(1:10000),
+                        use_datatable = FALSE)
+
 # variable referencing in the h2o.grid object
-ColNames=as.h2o(TRAIN[loopnames[i]] %>%
-                as.data.frame() %>%
-                slice(1),
-                use_datatable = FALSE) %>% 
-                colnames()
-  
-param_tune_NN= list(
-           # hidden=list(c(50,50,10),c(40,30,10),c(40,30,5)),
-           rate=c(0.09,0.08,0.07,0.06),
-           momentum_stable=c(0.9,0.8,0.7),
-           momentum_start=c(0.9,0.8,0.7)
-           )
+ColNames=colnames(training_frame)
 
 Best_NN[loopnames[i]]=h2o.grid(
                   algorithm="deeplearning",
@@ -845,16 +845,8 @@ Best_NN[loopnames[i]]=h2o.grid(
                   grid_id=paste(loopnames[i],"NN",sep="_"), 
 
                   # Data inputs
-                  training_frame = as.h2o(TRAIN[loopnames[i]] %>%
-                                            as.data.frame() %>%
-                                            slice(1:10000),
-                                          use_datatable = FALSE),
-                  
-                  validation_frame= as.h2o(TEST[loopnames[i]] %>%
-                                             as.data.frame() %>%
-                                             slice(1:10000),
-                                           use_datatable = FALSE),
-                  
+                  training_frame = training_frame,
+                  validation_frame=validation_frame,
                   x=setdiff(ColNames, ColNames[1]),
                   y=ColNames[1],
                   
@@ -894,36 +886,50 @@ Best_NN[loopnames[i]]=h2o.grid(
 
 # first I retrieve the list of models resulting form grid search
 grid=h2o.getGrid(grid_id = paste(loopnames[i],"NN",sep="_"),
-                 sort_by="err",decreasing=FALSE)
+                 sort_by="roc",decreasing=FALSE)
 
-print(grid)
+# print(grid)
 
 BestModel=h2o.getModel(grid@model_ids[[1]])
 
 # overwrite the model object with the best models' parameters
 Best_NN[loopnames[i]]=list(BestModel@model[["model_summary"]])
 
-# make the prediction on the best model
+# make the prediction on the best model (Testing set)
 Prediction=h2o.predict(BestModel,
-                       newdata=temporary_test)[,1]%>%
+                       newdata=validation_frame)[,1]%>%
                                as.data.frame()  %>%
                                as.matrix() %>%
                                factor()
 
-Reference=temporary_test[,1] %>% 
+Reference=validation_frame[,1] %>% 
           as.data.frame() %>% 
           as.matrix() %>% 
           factor()
 
 # feed the Prediction and true values to the caret confusionMatrix and save
 CM=confusionMatrix(data = Prediction,reference = Reference)
+ConfMat[[paste("NN_Test",loopnames[i],sep="_")]]=CM
 
-ConfMat[[paste(loopnames[i],"NN",sep="_")]]=CM
-# ConfMat$NN_Initial_Data$table/sum(ConfMat$NN_Initial_Data$table)
+# make the prediction on the best model (Training set)
+Prediction=h2o.predict(BestModel,
+                       newdata=training_frame)[,1]%>%
+                       as.data.frame()  %>%
+                       as.matrix() %>%
+                       factor()
+
+Reference=training_frame[,1] %>% 
+          as.data.frame() %>% 
+          as.matrix() %>% 
+          factor()
+
+# feed the Prediction and true values to the caret confusionMatrix and save
+CM=confusionMatrix(data = Prediction,reference = Reference)
+ConfMat[[paste("NN_Training",loopnames[i],sep="_")]]=CM
 
 # delete all not needed models and clear temporary grid
 h2o.removeAll()
-rm(grid)
+rm(grid,Prediction,Reference)
 }
 
 
@@ -932,40 +938,44 @@ rm(grid)
 # Same approach as for deep learning
 Best_RF=list()
 
-for (i in 1:4){
-  
+treshold=0.6
+
 # variable referencing in the h2o.grid object
-ColNames=as.h2o(TRAIN[loopnames[i]] %>%
-                as.data.frame() %>%
-                slice(1),
-                use_datatable = FALSE) %>% 
-                colnames()
+param_tune_RF= list(max_depth = c(20,25,30),
+                    min_rows = c(5,7,10),
+                    ntrees = c(40,50))
+
+
+for (i in 1:4){
+print(paste("Grid Search of params: RF, data: ", loopnames[i], sep=""))
   
-param_tune_RF= list(max_depth = c(20,25,30,40),
-                    min_rows = c(5,10,15,20,25),
-                    ntrees = c(20,30,40))
+# subset of training frame in h2o format
+training_frame = as.h2o(TRAIN[loopnames[i]] %>%
+                          as.data.frame() %>%
+                          slice(1:100000),
+                        use_datatable = FALSE)
+
+# subset of testing frame in h2o format
+validation_frame=as.h2o(TEST[loopnames[i]] %>%
+                     as.data.frame() %>%
+                     slice(1:10000),
+                   use_datatable = FALSE)
+
+ColNames=colnames(validation_frame) 
 
 # grid search for best model
 Best_RF[loopnames[i]]=h2o.grid(
                       algorithm="randomForest",
                       hyper_params=param_tune_RF,
-                      grid_id=paste(loopnames[i],"RF",sep="_"), 
-                      
-                      # Data input
-                      training_frame = as.h2o(TRAIN[loopnames[i]] %>%
-                                              as.data.frame() %>%
-                                              slice(1:100000),
-                                              use_datatable = FALSE),
-                      
-                      validation_frame= as.h2o(TEST[loopnames[i]] %>%
-                                               as.data.frame() %>%
-                                               slice(1:10000),
-                                               use_datatable = FALSE),
+                      grid_id=paste(loopnames[i],"RF",sep="_"),
+
+                      training_frame = training_frame,
+                      validation_frame= validation_frame,
                       
                       x=setdiff(ColNames, ColNames[1]),
                       y=ColNames[1],
                       seed = seed)
-  
+
   # to keep results from all models comparable, I translate the h2o object
   # back to a regular vector but even though as.data.frame() conversion
   # outputs a factor, I needed to do some equilibristics to get confusionMatrix
@@ -973,38 +983,58 @@ Best_RF[loopnames[i]]=h2o.grid(
   
   # first I retrieve the list of models resulting form grid search
   grid=h2o.getGrid(grid_id = paste(loopnames[i],"RF",sep="_"),
-                   sort_by="err",decreasing=FALSE)
+                   sort_by="auc",decreasing=FALSE)
   
-  print(grid)
+  # print(grid)
   
   BestModel=h2o.getModel(grid@model_ids[[1]])
   
   # overwrite the model object with the best models' parameters
   Best_RF[loopnames[i]]=list(BestModel@model[["model_summary"]])
-  
-  # make the prediction on the best model
+
+  # Confusion matrix for the test set
   Prediction=h2o.predict(BestModel,
-                         newdata=temporary_test)[,1]%>%
+                         newdata=validation_frame)[,1] %>%
                          as.data.frame()  %>%
                          as.matrix() %>%
                          factor()
-  
-  Reference=temporary_test[,1] %>% 
+
+  Reference=validation_frame[,1] %>% 
             as.data.frame() %>% 
             as.matrix() %>% 
             factor()
   
   # feed the Prediction and true values to the caret confusionMatrix and save
   CM=confusionMatrix(data = Prediction,reference = Reference)
+  ConfMat[[paste("RF_Test",loopnames[i],sep="_")]]=CM
   
-  ConfMat[[paste(loopnames[i],"RF",sep="_")]]=CM
-  # ConfMat$NN_Initial_Data$table/sum(ConfMat$NN_Initial_Data$table)
+  # Confusion matrix for the training set
+  Prediction=h2o.predict(BestModel,
+                         newdata=training_frame)[,1] %>%
+                         as.data.frame()  %>%
+                         as.matrix() %>%
+                         factor()
+  
+  Reference=training_frame[,1] %>% 
+            as.data.frame() %>% 
+            as.matrix() %>% 
+            factor()
+  
+  # feed the Prediction and true values to the caret confusionMatrix and save
+  CM=confusionMatrix(data = Prediction,reference = Reference)
+  ConfMat[[paste("RF_Training",loopnames[i],sep="_")]]=CM
   
   # delete all not needed models and clear temporary grid
   h2o.removeAll()
-  rm(grid)
+  rm(grid,
+     Prediction,
+     Reference,
+     training_frame,
+     validati_frame)
   
 }
+
+
 
 
 
