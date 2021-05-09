@@ -796,60 +796,83 @@ Specificity[1,4]=CM$byClass[2]
 # 
 
 
-# Neural Networks ----
-# these models are trained in a loop with grid search of hyperparameters
 
+# h2o models
 h2o.init()
-h2o.init(nthreads=-1, max_mem_size="2G")
+h2o.init(nthreads=3, max_mem_size="2G")
 h2o.removeAll() ## clean slate - just in case the cluster was already running
-
 
 loopnames=c("PCA_data_initial",
             "PCA_data",
             "PCA_data_resampled",
             "PCA_data_ROSE")
 
+# data needs to be passed as a h2o object and the wrapper function
+# does not work* when applied from within the h2o.grid or h2o.deeplearning function
+# *that's probably due to an error throwed by the function, relating data.frame 
+# package being outdated, but the error persists even after updating it...
+
+
+# Neural Networks ----
+# these models are trained in a loop with hyperparameters found through
+# grid search, which is performed on a fraction of the dataset.
+# otherwise, one iteration took over an hour.
+# After finding the optimal hyperparameters on a subsample of the training set,
+# I fit the network on the full training data (in each data case)
+
+# to store parameters of the best models
+Best_NN=list()
+
 for (i in 1:4){
+
+# variable referencing in the h2o.grid object
+ColNames=as.h2o(TRAIN[loopnames[i]] %>%
+                as.data.frame() %>%
+                slice(1),
+                use_datatable = FALSE) %>% 
+                colnames()
   
-temporary=as.h2o(TRAIN[loopnames[i]])
-temporary_test=as.h2o(x = TEST[loopnames[i]])
-
-
-param_tune= list(
-           hidden=list(c(50,50,10),c(40,30,10),c(40,30,5)),
-           rate=c(0.09,0.08,0.07),
-           momentum_stable=c(0.9,0.8,0.7)
+param_tune_NN= list(
+           # hidden=list(c(50,50,10),c(40,30,10),c(40,30,5)),
+           rate=c(0.09,0.08,0.07,0.06),
+           momentum_stable=c(0.9,0.8,0.7),
+           momentum_start=c(0.9,0.8,0.7)
            )
 
-
-NN_model=h2o.grid(
+Best_NN[loopnames[i]]=h2o.grid(
                   algorithm="deeplearning",
+                  hyper_params=param_tune_NN,
+                  grid_id=paste(loopnames[i],"NN",sep="_"), 
+
+                  # Data inputs
+                  training_frame = as.h2o(TRAIN[loopnames[i]] %>%
+                                            as.data.frame() %>%
+                                            slice(1:10000),
+                                          use_datatable = FALSE),
                   
-                  hyper_params=param_tune,
-                  grid_id="dl_grid", 
-                  # model_id="NN_Initial_Data", 
+                  validation_frame= as.h2o(TEST[loopnames[i]] %>%
+                                             as.data.frame() %>%
+                                             slice(1:10000),
+                                           use_datatable = FALSE),
                   
-                  # Data input
-                  training_frame=temporary, 
-                  validation_frame=temporary_test,   ## validation dataset: used for scoring and early stopping
-                  x=setdiff(names(TRAIN$PCA_data), "Response"),
-                  y="Response",
+                  x=setdiff(ColNames, ColNames[1]),
+                  y=ColNames[1],
                   
                   # Basic hyperparams.
+                  hidden=c(40,30,10),
                   activation="Tanh",   ## for ReLU I encountered the exploding gradient problem 
-                  epochs=30,
-                  mini_batch_size = 10000,
+                  epochs=50,
+                  # mini_batch_size = 10000,
                   
                   adaptive_rate=F,
-                  rate_annealing=0.1^(7),
-                  momentum_start=0.5,
+                  rate_annealing=0.1^(7),  # picked after lots of trials 
                   
                   # Manual learning parameters 
                   # score_validation_samples=1000,
                   # rate=0.05,
                   # rate_annealing=2e-6,            
                   # momentum_start=0.5,
-                  # momentum_stable=0.9,          ## plug 0.9
+                  # momentum_stable=0.9,          
                   
                   
                   # Output
@@ -870,14 +893,18 @@ NN_model=h2o.grid(
 # function to accept the inputs 
 
 # first I retrieve the list of models resulting form grid search
-grid=h2o.getGrid(grid_id = "dl_grid",sort_by="err",decreasing=FALSE)
+grid=h2o.getGrid(grid_id = paste(loopnames[i],"NN",sep="_"),
+                 sort_by="err",decreasing=FALSE)
 
-# save the best models' parameters
-# still figuring out how to fetch them from the h2o model object...
+print(grid)
 
+BestModel=h2o.getModel(grid@model_ids[[1]])
+
+# overwrite the model object with the best models' parameters
+Best_NN[loopnames[i]]=list(BestModel@model[["model_summary"]])
 
 # make the prediction on the best model
-Prediction=h2o.predict(h2o.getModel(grid@model_ids[[1]]),
+Prediction=h2o.predict(BestModel,
                        newdata=temporary_test)[,1]%>%
                                as.data.frame()  %>%
                                as.matrix() %>%
@@ -891,14 +918,93 @@ Reference=temporary_test[,1] %>%
 # feed the Prediction and true values to the caret confusionMatrix and save
 CM=confusionMatrix(data = Prediction,reference = Reference)
 
-ConfMat[["NN_Initial_Data"]]=CM
-ConfMat$NN_Initial_Data$table/sum(ConfMat$NN_Initial_Data$table)
-Models[loopnames[i]]=h2o.getModel(grid@model_ids[[1]])
+ConfMat[[paste(loopnames[i],"NN",sep="_")]]=CM
+# ConfMat$NN_Initial_Data$table/sum(ConfMat$NN_Initial_Data$table)
 
+# delete all not needed models and clear temporary grid
+h2o.removeAll()
+rm(grid)
 }
 
 
 
+# Random Forests ----
+# Same approach as for deep learning
+Best_RF=list()
+
+for (i in 1:4){
+  
+# variable referencing in the h2o.grid object
+ColNames=as.h2o(TRAIN[loopnames[i]] %>%
+                as.data.frame() %>%
+                slice(1),
+                use_datatable = FALSE) %>% 
+                colnames()
+  
+param_tune_RF= list(max_depth = c(20,25,30,40),
+                    min_rows = c(5,10,15,20,25),
+                    ntrees = c(20,30,40))
+
+# grid search for best model
+Best_RF[loopnames[i]]=h2o.grid(
+                      algorithm="randomForest",
+                      hyper_params=param_tune_RF,
+                      grid_id=paste(loopnames[i],"RF",sep="_"), 
+                      
+                      # Data input
+                      training_frame = as.h2o(TRAIN[loopnames[i]] %>%
+                                              as.data.frame() %>%
+                                              slice(1:100000),
+                                              use_datatable = FALSE),
+                      
+                      validation_frame= as.h2o(TEST[loopnames[i]] %>%
+                                               as.data.frame() %>%
+                                               slice(1:10000),
+                                               use_datatable = FALSE),
+                      
+                      x=setdiff(ColNames, ColNames[1]),
+                      y=ColNames[1],
+                      seed = seed)
+  
+  # to keep results from all models comparable, I translate the h2o object
+  # back to a regular vector but even though as.data.frame() conversion
+  # outputs a factor, I needed to do some equilibristics to get confusionMatrix
+  # function to accept the inputs 
+  
+  # first I retrieve the list of models resulting form grid search
+  grid=h2o.getGrid(grid_id = paste(loopnames[i],"RF",sep="_"),
+                   sort_by="err",decreasing=FALSE)
+  
+  print(grid)
+  
+  BestModel=h2o.getModel(grid@model_ids[[1]])
+  
+  # overwrite the model object with the best models' parameters
+  Best_RF[loopnames[i]]=list(BestModel@model[["model_summary"]])
+  
+  # make the prediction on the best model
+  Prediction=h2o.predict(BestModel,
+                         newdata=temporary_test)[,1]%>%
+                         as.data.frame()  %>%
+                         as.matrix() %>%
+                         factor()
+  
+  Reference=temporary_test[,1] %>% 
+            as.data.frame() %>% 
+            as.matrix() %>% 
+            factor()
+  
+  # feed the Prediction and true values to the caret confusionMatrix and save
+  CM=confusionMatrix(data = Prediction,reference = Reference)
+  
+  ConfMat[[paste(loopnames[i],"RF",sep="_")]]=CM
+  # ConfMat$NN_Initial_Data$table/sum(ConfMat$NN_Initial_Data$table)
+  
+  # delete all not needed models and clear temporary grid
+  h2o.removeAll()
+  rm(grid)
+  
+}
 
 
 
