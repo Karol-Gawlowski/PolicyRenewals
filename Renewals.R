@@ -687,11 +687,7 @@ Predictions=list()
 # for now it takes the first n=SubSet observations, later do: random sampling
 SubSet=10000
   
-  rm(Predict_Logistic_reg_fact,
-     Predict_Logistic_reg_Initial_fact,
-     Predict_Logistic_reg_resampled_fact,
-     Predict_Logistic_reg_ROSE_fact)
-
+# (caret) Logistic Regression ------
 # First I fit a simple model on the available data sets 
 # (Disregard the warnings relating to row names in tibbles)
 Best_LR=list()
@@ -741,17 +737,12 @@ for (i in 1:4){
   
 }
 
-# h2o models ----
+# h2o models 
 h2o.init()
 h2o.init(nthreads=3, max_mem_size="2G")
 h2o.removeAll() ## clean slate - just in case the cluster was already running
 
-loopnames=c("PCA_data_initial",
-            "PCA_data",
-            "PCA_data_resampled",
-            "PCA_data_ROSE")
-
-# Neural Networks ----
+# (h2o) Neural Networks ----
 # these models are trained in a loop with hyperparameters found through
 # grid search, which is performed on a fraction of the dataset.
 # otherwise, one iteration took over an hour.
@@ -831,7 +822,7 @@ for (i in 1:4){
   
   # first I retrieve the list of models resulting form grid search
   grid=h2o.getGrid(grid_id = paste(loopnames[i],"NN",sep="_"),
-                   sort_by="roc",decreasing=FALSE)
+                   sort_by="auc",decreasing=TRUE)
   
   # print(grid)
   
@@ -884,10 +875,9 @@ for (i in 1:4){
 
 
 
-# Random Forests ----
+# (h2o)  Random Forests ----
 # Same approach as for deep learning
 Best_RF=list()
-
 treshold=0.6
 
 # variable referencing in the h2o.grid object
@@ -932,7 +922,7 @@ for (i in 1:4){
   
   # first I retrieve the list of models resulting form grid search
   grid=h2o.getGrid(grid_id = paste(loopnames[i],"RF",sep="_"),
-                   sort_by="auc",decreasing=FALSE)
+                   sort_by="auc",decreasing=TRUE)
   
   # print(grid)
   
@@ -985,14 +975,117 @@ for (i in 1:4){
 }
 
 
+# (h2o)  GBM ----
+# Same approach as for deep learning
+Best_GBM=list()
+treshold=0.6
+
+# variable referencing in the h2o.grid object
+param_tune_GBM= list(learn_rate = c(0.04, 0.05, 0.06),
+                     max_depth = c(2,3,4,5,6,7),
+                     sample_rate = c(0.5,0.75, 1),
+                     col_sample_rate = c(0.5),
+                     ntrees = c(30,40,50))
+
+for (i in 1:4){
+  print(paste("Grid Search of params: GBM, data: ", loopnames[i], sep=""))
+  
+  # subset of training frame in h2o format
+  training_frame = as.h2o(TRAIN[loopnames[i]] %>%
+                          as.data.frame() %>%
+                          slice(1:100000),
+                          use_datatable = FALSE)
+  
+  # subset of testing frame in h2o format
+  validation_frame=as.h2o(TEST[loopnames[i]] %>%
+                          as.data.frame() %>%
+                          slice(1:10000),
+                          use_datatable = FALSE)
+  
+  ColNames=colnames(validation_frame) 
+  
+  # grid search for best model
+  Best_GBM[loopnames[i]]=h2o.grid(
+                          algorithm="gbm",
+                          hyper_params=param_tune_GBM,
+                          grid_id=paste(loopnames[i],"GBM",sep="_"),
+                          
+                          # ntrees = 40,
+                          
+                          training_frame = training_frame,
+                          validation_frame= validation_frame,
+                          
+                          x=setdiff(ColNames, ColNames[1]),
+                          y=ColNames[1],
+                          seed = seed)
+  
+  # to keep results from all models comparable, I translate the h2o object
+  # back to a regular vector but even though as.data.frame() conversion
+  # outputs a factor, I needed to do some equilibristics to get confusionMatrix
+  # function to accept the inputs 
+  
+  # first I retrieve the list of models resulting form grid search
+  grid=h2o.getGrid(grid_id = paste(loopnames[i],"GBM",sep="_"),
+                   sort_by="auc",decreasing=TRUE)
+  
+  # print(grid)
+  
+  BestModel=h2o.getModel(grid@model_ids[[1]])
+  
+  # overwrite the grid object with the best models' parameters
+  Best_GBM[loopnames[i]]=list(BestModel@model[["model_summary"]])
+  
+  # Confusion matrix for the test set
+  Prediction=h2o.predict(BestModel,
+                         newdata=validation_frame)[,1] %>%
+    as.data.frame()  %>%
+    as.matrix() %>%
+    factor()
+  
+  Reference=validation_frame[,1] %>% 
+    as.data.frame() %>% 
+    as.matrix() %>% 
+    factor()
+  
+  # feed the Prediction and true values to the caret confusionMatrix and save
+  CM=confusionMatrix(data = Prediction,reference = Reference)
+  ConfMat[[paste("GBM_Test",loopnames[i],sep="_")]]=CM
+  
+  # Confusion matrix for the training set
+  Prediction=h2o.predict(BestModel,
+                         newdata=training_frame)[,1] %>%
+    as.data.frame()  %>%
+    as.matrix() %>%
+    factor()
+  
+  Reference=training_frame[,1] %>% 
+    as.data.frame() %>% 
+    as.matrix() %>% 
+    factor()
+  
+  # feed the Prediction and true values to the caret confusionMatrix and save
+  CM=confusionMatrix(data = Prediction,reference = Reference)
+  ConfMat[[paste("GBM_Training",loopnames[i],sep="_")]]=CM
+  
+  # delete all not needed models and clear temporary grid
+  h2o.removeAll()
+  rm(grid,
+     Prediction,
+     Reference,
+     training_frame,
+     validati_frame,
+     BestModel)
+  
+}
 
 
+ConfMat$GBM_Training_PCA_data_resampled
 
 # turn of parallel computing
 stopCluster(makePSOCKcluster(4))
 
 # ///////////////////////////////////////
-# XAI ---- 
+# (XAI) Explainability ---- 
 # ///////////////////////////////////////
 
 # Prepare model explainer

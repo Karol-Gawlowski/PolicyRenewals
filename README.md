@@ -4,7 +4,7 @@ Data preparation, EDA and modeling on an imbalanced dataset from:
 https://www.kaggle.com/arashnic/imbalanced-data-practice?select=aug_train.csv 
 
 In this exercise:
-Explore Deep Learning with the h2o ML package, 
+Explore Deep Learning and Random Forests with the h2o ML package, 
 Apply explainable AI (XAI) methods with DALEX package,
 Work with SMOTE and ROSE methods for upsampling and PCA,
 Further improve my data wrangling skills with dplyr,
