@@ -1223,7 +1223,6 @@ rm(Final_GBM,
    Prediction,
    Reference)
 
- 
 # turn of parallel computing
 stopCluster(makePSOCKcluster(4))
 
