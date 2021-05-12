@@ -20,6 +20,8 @@ library(ROSE) # incl ROSE - Training and assessing classification rules with unb
 library(doParallel)
 library(data.table)
 library(h2o) # despite h2o.init() output, h2o requires not the newest java (>16) but (8-15)
+library(unbalanced) # Tomek method - remove such instances, that are similar in 1 nearest-neighbour sense
+
 
 options(digits=2)
 seed=100
@@ -381,16 +383,11 @@ Premiums=data %>%
                 Annual_Premium=Annual_Premium-Premium_Surplus) %>% 
          select(-Indicator)
 
-# Normalization (remember to run the function.R script first)
-Premiums$Premium_Surplus=Normalize(Premiums$Premium_Surplus)
-Premiums$Annual_Premium=Normalize(Premiums$Annual_Premium)
 
 data=data %>% select(-Annual_Premium)
 data=cbind(data,Premiums)
 rm(Premiums,k)
 
-# Normalize age
-data$Age=Normalize(data$Age)
 
 # ///////////////////////////////////////
 # train/test split and formatting----
@@ -429,11 +426,25 @@ data_initial = dummyVars("~ .", data=data_initial) %>%
 # note that for the initial data set we have to create a separate test set
 # for the other cases (different resampling approaches) the other test set will be used
 sample=c(sample_frac(as.data.frame(1:nrow(data)),size = 0.8))[[1]]
-train_data=data[sample,]
-test_data=data[-sample,]
 
-train_data_initial=data_initial[sample,]
-test_data_initial=data_initial[-sample,]
+# normalize continuous variables (remember to run functions.R first
+train_data=data[sample,] %>% mutate(Premium_Surplus=Normalize(Premium_Surplus),
+                                    Annual_Premium=Normalize(Annual_Premium),
+                                    Age=Normalize(Age))
+
+test_data=data[-sample,] %>% mutate(Premium_Surplus=Normalize(Premium_Surplus),
+                                    Annual_Premium=Normalize(Annual_Premium),
+                                    Age=Normalize(Age))
+
+train_data_initial=data_initial[sample,] %>% mutate(Annual_Premium=Normalize(Annual_Premium),
+                                                    Age=Normalize(Age),
+                                                    Vintage=Normalize(Vintage))
+                                                    
+test_data_initial=data_initial[-sample,] %>% mutate(Annual_Premium=Normalize(Annual_Premium),
+                                                    Age=Normalize(Age),
+                                                    Vintage=Normalize(Vintage))
+
+
 
 # ///////////////////////////////////////
 # Upsampling  ----
@@ -480,6 +491,15 @@ train_data_ROSE=rbind(train_data,
                              Age=Normalize(Age),
                              across(5:76,FactorToInteger)))
 
+
+
+
+# apply tomek method
+train_data_tomek=train_data[-ubTomek(X=train_data %>% select(-Response),
+                                Y=train_data$Response,
+                                verbose=TRUE)$id.rm,]
+
+
 # Todo: SMOTE
 # the SMOTE function takes forever to execute. Since the package is officially archived, 
 # I might redo this algorithm 
@@ -498,6 +518,7 @@ PCA_Rot_train_data_initial = prcomp(train_data_initial[,-1])
 PCA_Rot_train_data = prcomp(train_data[,-1])
 PCA_Rot_train_data_resampled = prcomp(train_data_resampled[,-1])
 PCA_Rot_train_data_ROSE = prcomp(train_data_ROSE[,-1])
+PCA_Rot_train_data_tomek = prcomp(train_data_tomek[,-1])
 
 
 # Training sets
@@ -532,12 +553,20 @@ PCA_train_data_ROSE = train_data_ROSE[,-1] %>%
                       select(1:k) %>% 
                       add_column(train_data_ROSE[,1],.before="PC1")
 
+PCA_train_data_tomek = train_data_tomek[,-1] %>% 
+                  data.matrix() %*% 
+                  PCA_Rot_train_data_tomek$rotation %>% 
+                  as_tibble() %>% 
+                  select(1:k) %>% 
+                  add_column(train_data_tomek[,1],.before="PC1")
+
 # The first two principal components seem to have 'found' the way
 # to characterize the Response.
 # A similar profile is seen in each dataset case, except for the initial data.
 # It seems that the feature engineering indeed helped to make differences
 # between the two groups more distinguishable.
 # Comparing the ROSE and resampled data that, ROSE does not introduce noise. 
+# thus I will remove the irrelevant two "stripes" from the tomek data
 PCA_train_data_initial %>%
   ggplot(aes(x=PC1,y=PC2,color=Response))+
   geom_point(alpha=0.5)+
@@ -561,6 +590,17 @@ PCA_train_data_ROSE %>%
   geom_point(alpha=0.5)+
   ggtitle("Principal Components by Response",
           subtitle="ROSE Train Data")
+
+PCA_train_data_tomek %>% 
+  # filter((-0.5)*PC1+0.5<PC2) %>% 
+  ggplot(aes(x=PC1,y=PC2,color=Response))+
+  geom_point(alpha=0.5)+
+  ggtitle("Principal Components by Response",
+          subtitle="Train Tomek")+ 
+  geom_abline(intercept = 0.5,  # interesting
+              slope = -0.5, 
+              color="red", 
+              linetype="dashed", size=0.5)
 
 # Test sets 
 # I apply the train set rotation matrices to create new train sets.
@@ -598,16 +638,39 @@ PCA_test_data_ROSE = test_data[,-1] %>%
                      select(1:k) %>% 
                      add_column(test_data[,1],.before="PC1")
 
+PCA_test_data_tomek = test_data[,-1] %>% 
+                 data.matrix() %*% 
+                 PCA_Rot_train_data_tomek$rotation %>% 
+                 as_tibble() %>% 
+                 select(1:k) %>% 
+                 add_column(test_data[,1],.before="PC1")
+
+
+# cutting off the irrelevant observations
+# locate instances above the dashed line
+indicator=which((-0.5)*PCA_train_data_tomek$PC1+0.5<PCA_train_data_tomek$PC2)
+
+# observations "below the line" renew the policy 698 out of 164070 times (0.43%)
+summary(PCA_train_data_tomek[-indicator,])
+summary(PCA_train_data_tomek[indicator,])
+
+PCA_train_data_tomek=PCA_train_data_tomek %>% filter((-0.5)*PC1+0.5<PC2) 
+PCA_test_data_tomek=PCA_test_data_tomek %>% filter((-0.5)*PC1+0.5<PC2) 
+
+
+
 # clean env - store train and test objects in lists and delete global variables
 TRAIN=list(data_initial=train_data_initial,
            data=train_data,
            data_resampled=train_data_resampled,
            data_ROSE=train_data_ROSE,
+           data_tomek=train_data_tomek,
            
            PCA_data_initial=PCA_train_data_initial,
            PCA_data=PCA_train_data,
            PCA_data_resampled=PCA_train_data_resampled,
-           PCA_data_ROSE=PCA_train_data_ROSE)
+           PCA_data_ROSE=PCA_train_data_ROSE,
+           PCA_data_tomek=PCA_train_data_tomek)
 
 TEST=list(data_initial=test_data_initial,
           data=test_data,
@@ -615,14 +678,17 @@ TEST=list(data_initial=test_data_initial,
           PCA_data_initial=PCA_test_data_initial,
           PCA_data=PCA_test_data,
           PCA_data_resampled=PCA_test_data_resampled,
-          PCA_data_ROSE=PCA_test_data_ROSE)
+          PCA_data_ROSE=PCA_test_data_ROSE,
+          PCA_data_tomek=PCA_test_data_tomek)
 
 rm(k,
+   indicator,
    
    train_data_initial,
    train_data,
    train_data_resampled,
    train_data_ROSE,
+   train_data_tomek,
    
    test_data_initial,
    test_data,
@@ -631,16 +697,19 @@ rm(k,
    PCA_Rot_train_data,
    PCA_Rot_train_data_resampled,
    PCA_Rot_train_data_ROSE,
+   PCA_Rot_data_tomek,
    
    PCA_train_data_initial,
    PCA_train_data,
    PCA_train_data_resampled,
-   PCA_train_data_ROSE,   
+   PCA_train_data_ROSE,
+   PCA_train_data_tomek,
    
    PCA_test_data_initial,
    PCA_test_data,
    PCA_test_data_resampled,
-   PCA_test_data_ROSE)
+   PCA_test_data_ROSE,
+   PCA_test_data_tomek)
 
 # ///////////////////////////////////////
 # Modeling - setting up ---- 
@@ -667,10 +736,13 @@ rownames(Accuracy)=c("LogisticRegression",
                      "RandomForest",
                      "GBM")
 
+# these names correspond to the elemets of the TRAIN/TEST lists that I want
+# to use in the training process
 loopnames=c("PCA_data_initial",
             "PCA_data",
             "PCA_data_resampled",
-            "PCA_data_ROSE")
+            "PCA_data_ROSE",
+            'PCA_data_tomek')
 
 Specificity=Accuracy
 
@@ -686,14 +758,17 @@ Predictions=list()
 # then the training will take much longer.
 # for now it takes the first n=SubSet observations, later do: random sampling
 SubSet=10000
-  
+
+LoopCount=length(loopnames)  
+
+
 # (caret) Logistic Regression ------
 # First I fit a simple model on the available data sets 
 # (Disregard the warnings relating to row names in tibbles)
 Best_LR=list()
 treshold=0.5
 
-for (i in 1:4){
+for (i in 1:LoopCount){
   print(paste("Training model: Logistic Regression, data: ", loopnames[i], sep=""))
   
   training_frame = TRAIN[[loopnames[i]]] %>% slice(1:10000)
@@ -759,12 +834,12 @@ param_tune_NN= list(
   momentum_start=c(0.9,0.8,0.7)
 )
 
-for (i in 1:4){
+for (i in 1:LoopCount){
   print(paste("Grid Search of params: NN, data: ", loopnames[i], sep=""))
   
   training_frame = as.h2o(TRAIN[loopnames[i]] %>%
                             as.data.frame() %>%
-                            slice(1:100000),
+                            slice(1:10000),
                           use_datatable = FALSE)
   
   validation_frame=as.h2o(TEST[loopnames[i]] %>%
@@ -823,8 +898,8 @@ for (i in 1:4){
   # first I retrieve the list of models resulting form grid search
   grid=h2o.getGrid(grid_id = paste(loopnames[i],"NN",sep="_"),
                    sort_by="auc",decreasing=TRUE)
-  
-  # print(grid)
+
+  print(grid)
   
   BestModel=h2o.getModel(grid@model_ids[[1]])
   
@@ -847,6 +922,9 @@ for (i in 1:4){
   CM=confusionMatrix(data = Prediction,reference = Reference)
   ConfMat[[paste("NN_Test",loopnames[i],sep="_")]]=CM
   
+  print(paste("Neural Network, test data results for:",loopnames[i],":",sep=" "))
+  CM
+  
   # make the prediction on the best model (Training set)
   Prediction=h2o.predict(BestModel,
                          newdata=training_frame)[,1]%>%
@@ -863,13 +941,16 @@ for (i in 1:4){
   CM=confusionMatrix(data = Prediction,reference = Reference)
   ConfMat[[paste("NN_Training",loopnames[i],sep="_")]]=CM
   
+  print(paste("Neural Network, train data results for:",loopnames[i],":",sep=" "))
+  CM
+  
   # delete all not needed models and clear temporary grid
   h2o.removeAll()
   rm(grid,
      Prediction,
      Reference,
      training_frame,
-     validati_frame,
+     validation_frame,
      BestModel)
 }
 
@@ -885,7 +966,8 @@ param_tune_RF= list(max_depth = c(20,25,30),
                     min_rows = c(5,7,10),
                     ntrees = c(40,50))
 
-for (i in 1:4){
+for (i in 1:LoopCount){
+  
   print(paste("Grid Search of params: RF, data: ", loopnames[i], sep=""))
     
   # subset of training frame in h2o format
@@ -924,7 +1006,7 @@ for (i in 1:4){
   grid=h2o.getGrid(grid_id = paste(loopnames[i],"RF",sep="_"),
                    sort_by="auc",decreasing=TRUE)
   
-  # print(grid)
+  print(grid)
   
   BestModel=h2o.getModel(grid@model_ids[[1]])
   
@@ -947,6 +1029,9 @@ for (i in 1:4){
   CM=confusionMatrix(data = Prediction,reference = Reference)
   ConfMat[[paste("RF_Test",loopnames[i],sep="_")]]=CM
   
+  print(paste("Random Forest, test data results for:",loopnames[i],":",sep=" "))
+  CM
+  
   # Confusion matrix for the training set
   Prediction=h2o.predict(BestModel,
                          newdata=training_frame)[,1] %>%
@@ -962,6 +1047,9 @@ for (i in 1:4){
   # feed the Prediction and true values to the caret confusionMatrix and save
   CM=confusionMatrix(data = Prediction,reference = Reference)
   ConfMat[[paste("RF_Training",loopnames[i],sep="_")]]=CM
+
+  print(paste("Random Forest, train data results for:",loopnames[i],":",sep=" "))
+  CM
   
   # delete all not needed models and clear temporary grid
   h2o.removeAll()
@@ -969,7 +1057,7 @@ for (i in 1:4){
      Prediction,
      Reference,
      training_frame,
-     validati_frame,
+     validation_frame,
      BestModel)
   
 }
@@ -987,7 +1075,7 @@ param_tune_GBM= list(learn_rate = c(0.04, 0.05, 0.06),
                      col_sample_rate = c(0.5),
                      ntrees = c(30,40,50))
 
-for (i in 1:4){
+for (i in 1:LoopCount){
   print(paste("Grid Search of params: GBM, data: ", loopnames[i], sep=""))
   
   # subset of training frame in h2o format
@@ -1028,7 +1116,7 @@ for (i in 1:4){
   grid=h2o.getGrid(grid_id = paste(loopnames[i],"GBM",sep="_"),
                    sort_by="auc",decreasing=TRUE)
   
-  # print(grid)
+  print(grid)
   
   BestModel=h2o.getModel(grid@model_ids[[1]])
   
@@ -1051,6 +1139,9 @@ for (i in 1:4){
   CM=confusionMatrix(data = Prediction,reference = Reference)
   ConfMat[[paste("GBM_Test",loopnames[i],sep="_")]]=CM
   
+  print(paste("GBM, test data results for:",loopnames[i],":",sep=" "))
+  CM
+  
   # Confusion matrix for the training set
   Prediction=h2o.predict(BestModel,
                          newdata=training_frame)[,1] %>%
@@ -1067,20 +1158,72 @@ for (i in 1:4){
   CM=confusionMatrix(data = Prediction,reference = Reference)
   ConfMat[[paste("GBM_Training",loopnames[i],sep="_")]]=CM
   
+  print(paste("GBM, train data results for:",loopnames[i],":",sep=" "))
+  CM
+  
   # delete all not needed models and clear temporary grid
   h2o.removeAll()
   rm(grid,
      Prediction,
      Reference,
      training_frame,
-     validati_frame,
+     validation_frame,
      BestModel)
   
 }
 
 
-ConfMat$GBM_Training_PCA_data_resampled
+# Retrieve the best models hyperparams and train on full dataset
 
+# subset of training frame in h2o format
+# Final GBM ----
+training_frame = as.h2o(TRAIN$PCA_data_tomek %>%
+                          as.data.frame(),
+                        use_datatable = FALSE)
+
+# subset of testing frame in h2o format
+validation_frame=as.h2o(TEST$PCA_data_tomek %>%
+                          as.data.frame(),
+                        use_datatable = FALSE)
+
+ColNames=colnames(validation_frame) 
+
+Final_GBM = h2o.gbm(training_frame = training_frame,
+                    validation_frame= validation_frame,
+                    model_id = "Final_GBM",
+                    x=setdiff(ColNames, ColNames[1]),
+                    y=ColNames[1],
+                    
+                    col_sample_rate = 0.5,
+                    learn_rate = 0.2,
+                    max_depth = 20,
+                    ntrees = 100,
+                    sample_rate = 0.8,
+                    seed = seed)
+
+Prediction=h2o.predict(Final_GBM,
+                       newdata=validation_frame)[,1] %>%
+                       as.data.frame()  %>%
+                       as.matrix() %>%
+                       factor()
+
+Reference=validation_frame[,1] %>% 
+          as.data.frame() %>% 
+          as.matrix() %>% 
+          factor()
+
+# feed the Prediction and true values to the caret confusionMatrix and save
+CM=confusionMatrix(data = Prediction,reference = Reference)
+ConfMat[[paste("GBM_Final_Test",loopnames[i],sep="_")]]=CM
+
+CM
+
+h2o.removeAll()
+rm(Final_GBM,
+   Prediction,
+   Reference)
+
+ 
 # turn of parallel computing
 stopCluster(makePSOCKcluster(4))
 
@@ -1129,9 +1272,7 @@ explainer %>%
 # check if the dependency eg on age is linear and whether there is a significant difference among two groups
 # if yes - then add +/-1 to the age (thus create two extra data instances that bought the policy)
 
-# Pre-processing - PCA, LDA/QDA + Logistic Regression, NN, RF
-
-# Neural network -> logistic regression (like suggested by Mario Wutrich)
+# Neural network -> glm (logistic regression) (like suggested by Mario Wutrich)
 
 # Explainability
 
